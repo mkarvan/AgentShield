@@ -33,27 +33,27 @@ Run the installation command appropriate to your environment.
 
 **Standard install (CVE checks + typosquatting only):**
 ```bash
-pip install agentshield
+pip install agent-shield
 ```
 
 **With static analysis support (`--deep` flag):**
 ```bash
-pip install agentshield[static-analysis]
+pip install agent-shield[static-analysis]
 ```
 
 **With Hermes Agent integration:**
 ```bash
-pip install agentshield[hermes]
+pip install agent-shield[hermes]
 ```
 
 **With OpenClaw integration:**
 ```bash
-pip install agentshield[openclaw]
+pip install agent-shield[openclaw]
 ```
 
 **With everything:**
 ```bash
-pip install agentshield[all]
+pip install agent-shield[all]
 ```
 
 **Verify installation:**

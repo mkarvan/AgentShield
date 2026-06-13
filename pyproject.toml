@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agentshield"
+name = "agent-shield"
 version = "0.1.0"
 description = "Security layer for AI agent frameworks — intercepts package installs and checks for vulnerabilities"
 readme = "README.md"
@@ -49,7 +49,7 @@ static-analysis = [
     "semgrep>=1.70",
 ]
 all = [
-    "agentshield[hermes,openclaw,static-analysis]",
+    "agent-shield[hermes,openclaw,static-analysis]",
 ]
 dev = [
     "pytest>=8.0",

@@ -178,7 +178,7 @@ All defaults are overridable per severity, ecosystem, or rule ID in `config.toml
 ## Installation
 
 ```bash
-pip install agentshield
+pip install agent-shield
 ```
 
 **Python 3.11+ required.**
@@ -187,16 +187,16 @@ pip install agentshield
 
 ```bash
 # Static analysis (semgrep + bandit) — needed for --deep flag
-pip install agentshield[static-analysis]
+pip install agent-shield[static-analysis]
 
 # Hermes Agent integration
-pip install agentshield[hermes]
+pip install agent-shield[hermes]
 
 # OpenClaw integration
-pip install agentshield[openclaw]
+pip install agent-shield[openclaw]
 
 # Everything
-pip install agentshield[all]
+pip install agent-shield[all]
 ```
 
 ---
@@ -453,7 +453,7 @@ AgentShield registers as a Hermes tool plugin and intercepts two categories of t
 
 **Install:**
 ```bash
-pip install agentshield[hermes]
+pip install agent-shield[hermes]
 ```
 
 **Register in `hermes_config.yaml`:**
@@ -491,7 +491,7 @@ AgentShieldSkill is a pre-condition skill that the OpenClaw kernel calls before 
 
 **Install:**
 ```bash
-pip install agentshield[openclaw]
+pip install agent-shield[openclaw]
 ```
 
 **Register in `openclaw_config.yaml`:**

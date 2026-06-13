@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 from agentshield.core.config import Config
 from agentshield.core.models import DecisionAction, Ecosystem, Finding, ScanRequest
@@ -143,7 +144,7 @@ _PKG_SPEC_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(?:[><=!
 # ── helpers (module-level, testable) ─────────────────────────────────────────
 
 
-def _extract_command(args: dict) -> str | None:
+def _extract_command(args: dict[str, Any]) -> str | None:
     """Return the shell command string from a tool call's args dict."""
     for key in ("command", "cmd", "code"):
         val = args.get(key)

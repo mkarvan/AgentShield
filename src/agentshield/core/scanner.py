@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 from agentshield.core.cache import ScanCache
 from agentshield.core.config import Config
@@ -204,7 +205,7 @@ class AgentShield:
         from agentshield.analyzers.typosquatting import TyposquattingChecker
         from agentshield.databases.malicious_db import MaliciousDB
 
-        tasks: list = [
+        tasks: list[Any] = [
             TyposquattingChecker().scan(request),
             MaliciousDB().check(request, db_path=self.config.cache.db_path),
             _query_cve_mirror(request, self.config.cache.db_path),

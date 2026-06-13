@@ -25,14 +25,14 @@ from agentshield.core.scanner import AgentShield
 try:
     from openclaw.skills import Skill, SkillContext, SkillResult  # type: ignore[import-not-found]
 except ImportError:
-    from agentshield.integrations.openclaw._types import (  # type: ignore[assignment]
+    from agentshield.integrations.openclaw._types import (
         Skill,
         SkillContext,
         SkillResult,
     )
 
 
-class AgentShieldSkill(Skill):
+class AgentShieldSkill(Skill):  # type: ignore[misc]
     """OpenClaw pre-condition skill — scans packages before install.
 
     ``execute()`` is called by the OpenClaw kernel before any triggered

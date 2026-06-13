@@ -11,6 +11,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
+from typing import Any
 
 from agentshield.core.models import Finding, ScanRequest, Severity
 
@@ -78,15 +79,15 @@ async def run_npm_audit(package_dir: Path, request: ScanRequest) -> list[Finding
     return _parse_npm_audit(data, request)
 
 
-def _parse_npm_audit(data: dict, request: ScanRequest) -> list[Finding]:
+def _parse_npm_audit(data: dict[str, Any], request: ScanRequest) -> list[Finding]:
     findings: list[Finding] = []
-    vulnerabilities: dict = data.get("vulnerabilities", {})
+    vulnerabilities: dict[str, Any] = data.get("vulnerabilities", {})
 
     for pkg_name, vuln_info in vulnerabilities.items():
         severity_str: str = vuln_info.get("severity", "low").lower()
         severity = _NPM_SEVERITY_MAP.get(severity_str, Severity.LOW)
 
-        via: list = vuln_info.get("via", [])
+        via: list[Any] = vuln_info.get("via", [])
         cve_ids: list[str] = []
         for item in via:
             if isinstance(item, dict):

@@ -121,7 +121,7 @@ async def _process_ecosystem(
     osv_name: str,
     ecosystem: Ecosystem,
     progress_callback: Any | None,
-) -> tuple[list[tuple], list[tuple], int]:
+) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]], int]:
     """Download and parse the OSV bulk zip for one ecosystem.
 
     Returns (cve_rows, malicious_rows, total_advisories_scanned).
@@ -139,8 +139,8 @@ async def _process_ecosystem(
     if progress_callback is not None and callable(progress_callback):
         progress_callback(ecosystem.value, "parsing", 0)
 
-    cve_rows: list[tuple] = []
-    mal_rows: list[tuple] = []
+    cve_rows: list[tuple[Any, ...]] = []
+    mal_rows: list[tuple[Any, ...]] = []
     count = 0
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
@@ -159,10 +159,10 @@ async def _process_ecosystem(
 
 
 def _parse_advisory(
-    adv: dict,
+    adv: dict[str, Any],
     ecosystem: Ecosystem,
-    cve_rows: list[tuple],
-    mal_rows: list[tuple],
+    cve_rows: list[tuple[Any, ...]],
+    mal_rows: list[tuple[Any, ...]],
 ) -> None:
     adv_id: str = adv.get("id", "")
     if not adv_id:
@@ -212,7 +212,7 @@ def _parse_advisory(
         )
 
 
-def _extract_severity(adv: dict) -> tuple[str, float | None]:
+def _extract_severity(adv: dict[str, Any]) -> tuple[str, float | None]:
     """Return (severity_string, cvss_score) from an OSV advisory."""
     db_sev = adv.get("database_specific", {}).get("severity", "")
     if db_sev:
@@ -272,9 +272,9 @@ def _cvss3_score(vector: str) -> float | None:
         return None
 
 
-def _extract_affected_versions(adv: dict) -> str:
+def _extract_affected_versions(adv: dict[str, Any]) -> str:
     """Build a compact JSON string summarising affected version ranges."""
-    ranges: list[dict] = []
+    ranges: list[dict[str, Any]] = []
     for affected in adv.get("affected", []):
         for rng in affected.get("ranges", []):
             events = rng.get("events", [])

@@ -11,6 +11,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
+from typing import Any
 
 from agentshield.core.models import Finding, ScanRequest, Severity
 
@@ -142,9 +143,9 @@ async def run_bandit(package_dir: Path, request: ScanRequest) -> list[Finding]:
     return _parse_bandit_output(data)
 
 
-def _parse_bandit_output(data: dict) -> list[Finding]:
+def _parse_bandit_output(data: dict[str, Any]) -> list[Finding]:
     findings: list[Finding] = []
-    results: list[dict] = data.get("results", [])
+    results: list[dict[str, Any]] = data.get("results", [])
 
     seen: set[str] = set()
 

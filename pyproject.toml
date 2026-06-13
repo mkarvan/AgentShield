@@ -51,6 +51,7 @@ dev = [
     "respx>=0.21",
     "ruff>=0.4",
     "mypy>=1.10",
+    "types-toml>=0.10",
     "pre-commit>=3.7",
 ]
 

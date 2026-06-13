@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -42,7 +43,8 @@ def _load_curated() -> dict[str, list[str]]:
     if not _CURATED_LIST_FILE.exists():
         return {}
     try:
-        return json.loads(_CURATED_LIST_FILE.read_text())
+        result: dict[str, list[str]] = json.loads(_CURATED_LIST_FILE.read_text())
+        return result
     except Exception:
         return {}
 
@@ -131,10 +133,8 @@ class MaliciousDB:
                     inserted = await cache.add_malicious_packages_bulk(rows)
                     total += inserted
                     logger.info("Warmed %d malicious packages for %s", inserted, ecosystem.value)
-                if progress_callback is not None:
-                    callback = progress_callback  # type: ignore[assignment]
-                    if callable(callback):
-                        callback(ecosystem.value, len(rows))
+                if progress_callback is not None and callable(progress_callback):
+                    progress_callback(ecosystem.value, len(rows))
             except Exception as exc:
                 logger.warning(
                     "Failed to fetch malicious packages for %s: %s", ecosystem.value, exc
@@ -203,7 +203,7 @@ async def _fetch_malicious_from_osv(
     return rows
 
 
-async def _check_sqlite(package: str, ecosystem: str, db_path: Path) -> dict | None:
+async def _check_sqlite(package: str, ecosystem: str, db_path: Path) -> dict[str, Any] | None:
     """Check the malicious_packages SQLite table. Returns row dict or None."""
     try:
         import aiosqlite

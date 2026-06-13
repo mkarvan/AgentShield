@@ -11,6 +11,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
+from typing import Any
 
 from agentshield.core.models import Finding, ScanRequest, Severity
 
@@ -90,12 +91,12 @@ async def run_cargo_audit(package_dir: Path, request: ScanRequest) -> list[Findi
     return _parse_cargo_audit(data, request)
 
 
-def _parse_cargo_audit(data: dict, request: ScanRequest) -> list[Finding]:
+def _parse_cargo_audit(data: dict[str, Any], request: ScanRequest) -> list[Finding]:
     findings: list[Finding] = []
-    vulnerabilities: list[dict] = data.get("vulnerabilities", {}).get("list", [])
+    vulnerabilities: list[dict[str, Any]] = data.get("vulnerabilities", {}).get("list", [])
 
     for vuln in vulnerabilities:
-        advisory: dict = vuln.get("advisory", {})
+        advisory: dict[str, Any] = vuln.get("advisory", {})
         vuln_id: str = advisory.get("id", "UNKNOWN")
         title: str = advisory.get("title", vuln_id)
         description: str = advisory.get("description", "")
@@ -111,7 +112,7 @@ def _parse_cargo_audit(data: dict, request: ScanRequest) -> list[Finding]:
 
         severity = _cvss_to_severity(cvss_score)
 
-        affected: dict = vuln.get("package", {})
+        affected: dict[str, Any] = vuln.get("package", {})
         pkg_name = affected.get("name", request.package)
         pkg_version = affected.get("version", "")
 

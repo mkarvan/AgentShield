@@ -12,6 +12,7 @@ import zipfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -40,7 +41,7 @@ async def _resolve_pypi_url(package: str, version: str | None) -> str:
         data = resp.json()
 
     # Prefer wheels; fall back to sdist
-    urls: list[dict] = data.get("urls") or []
+    urls: list[dict[str, Any]] = data.get("urls") or []
     if not urls and "releases" in data:
         ver = data.get("info", {}).get("version", "")
         urls = data.get("releases", {}).get(ver, [])
@@ -52,7 +53,7 @@ async def _resolve_pypi_url(package: str, version: str | None) -> str:
     if not candidates:
         raise WheelExtractionError(f"No downloadable artifacts found for {package}=={version}")
 
-    return candidates[0]["url"]
+    return str(candidates[0]["url"])
 
 
 async def _download(url: str, dest: Path) -> None:

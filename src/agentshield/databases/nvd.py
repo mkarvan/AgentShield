@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
 import httpx
 
@@ -119,7 +120,7 @@ class NVDClient:
         return findings
 
 
-def _cve_to_finding(cve: dict, package: str) -> Finding | None:
+def _cve_to_finding(cve: dict[str, Any], package: str) -> Finding | None:
     cve_id: str = cve.get("id", "")
     if not cve_id:
         return None
@@ -151,7 +152,7 @@ def _cve_to_finding(cve: dict, package: str) -> Finding | None:
     )
 
 
-def _extract_metrics(cve: dict) -> tuple[Severity, float | None]:
+def _extract_metrics(cve: dict[str, Any]) -> tuple[Severity, float | None]:
     metrics = cve.get("metrics", {})
 
     # Prefer CVSSv3.1, then 3.0, then 2.0

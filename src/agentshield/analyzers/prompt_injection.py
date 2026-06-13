@@ -10,11 +10,12 @@ Severity: MEDIUM, default response: warn_confirm.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from agentshield.core.models import Finding, ScanRequest, Severity
 
 # Each factory takes an escaped package name and returns a compiled pattern.
-_PATTERN_FACTORIES = [
+_PATTERN_FACTORIES: list[Callable[[str], re.Pattern[str]]] = [
     # Quoted strings: "requests" or 'requests'
     lambda pkg: re.compile(rf"""['"]{pkg}['"]""", re.IGNORECASE),
     # Backtick inline code: `requests` or `pip install requests`

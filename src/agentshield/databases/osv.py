@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import httpx
 
@@ -27,7 +28,7 @@ _SEVERITY_RATING_MAP: dict[str, Severity] = {
 
 class OSVClient:
     async def scan(self, request: ScanRequest) -> list[Finding]:
-        payload: dict = {
+        payload: dict[str, Any] = {
             "package": {
                 "name": request.package,
                 "ecosystem": _ECOSYSTEM_MAP[request.ecosystem],
@@ -44,7 +45,7 @@ class OSVClient:
         return [_vuln_to_finding(v) for v in data.get("vulns", [])]
 
 
-def _vuln_to_finding(vuln: dict) -> Finding:
+def _vuln_to_finding(vuln: dict[str, Any]) -> Finding:
     severity, cvss_score = _extract_severity(vuln)
 
     vuln_type = vuln.get("database_specific", {}).get("type", "")
@@ -66,7 +67,7 @@ def _vuln_to_finding(vuln: dict) -> Finding:
     )
 
 
-def _extract_severity(vuln: dict) -> tuple[Severity, float | None]:
+def _extract_severity(vuln: dict[str, Any]) -> tuple[Severity, float | None]:
     """Return (severity, cvss_score) for an OSV vuln object."""
     cvss_score: float | None = None
     severity = Severity.MEDIUM  # safe default
@@ -135,7 +136,7 @@ def _cvss3_base_score(vector: str) -> float | None:
         return None
 
 
-def _extract_remediation(vuln: dict) -> str | None:
+def _extract_remediation(vuln: dict[str, Any]) -> str | None:
     for affected in vuln.get("affected", []):
         for r in affected.get("ranges", []):
             for event in r.get("events", []):

@@ -15,6 +15,7 @@ Reference: https://docs.github.com/en/graphql/reference/objects#securityvulnerab
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import httpx
 
@@ -118,7 +119,7 @@ class GitHubAdvisoryClient:
         return findings
 
 
-def _node_to_finding(node: dict, request: ScanRequest) -> Finding | None:
+def _node_to_finding(node: dict[str, Any], request: ScanRequest) -> Finding | None:
     advisory = node.get("advisory", {})
 
     # Skip withdrawn advisories

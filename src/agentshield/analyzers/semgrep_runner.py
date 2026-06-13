@@ -11,6 +11,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
+from typing import Any
 
 from agentshield.core.models import Finding, ScanRequest, Severity
 
@@ -93,7 +94,7 @@ async def run_semgrep(package_dir: Path, request: ScanRequest) -> list[Finding]:
     return _parse_semgrep_output(data, request)
 
 
-def _parse_semgrep_output(data: dict, request: ScanRequest) -> list[Finding]:
+def _parse_semgrep_output(data: dict[str, Any], request: ScanRequest) -> list[Finding]:
     findings: list[Finding] = []
     results = data.get("results", [])
 
@@ -102,7 +103,7 @@ def _parse_semgrep_output(data: dict, request: ScanRequest) -> list[Finding]:
     for result in results:
         check_id: str = result.get("check_id", "unknown")
         message: str = result.get("extra", {}).get("message", check_id)
-        meta: dict = result.get("extra", {}).get("metadata", {})
+        meta: dict[str, Any] = result.get("extra", {}).get("metadata", {})
 
         # Extract AgentShield rule ID from metadata (e.g. "T3.1")
         rule_id = meta.get("agentshield_rule", check_id)

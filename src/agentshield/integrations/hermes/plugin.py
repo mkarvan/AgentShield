@@ -21,7 +21,7 @@ from agentshield.core.scanner import AgentShield
 try:
     from hermes.tools import ToolCall, ToolPlugin, ToolResult  # type: ignore[import-not-found]
 except ImportError:
-    from agentshield.integrations.hermes._types import (  # type: ignore[assignment]
+    from agentshield.integrations.hermes._types import (
         ToolCall,
         ToolPlugin,
         ToolResult,
@@ -34,7 +34,7 @@ _TOOL_ECOSYSTEM: dict[str, Ecosystem] = {
 }
 
 
-class AgentShieldPlugin(ToolPlugin):
+class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
     """Hermes tool plugin — scans packages before install.
 
     Registered in Hermes as a plugin; ``before_tool_call`` is invoked by the

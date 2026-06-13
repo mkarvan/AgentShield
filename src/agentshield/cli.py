@@ -230,7 +230,7 @@ def cache(
 async def _cmd_warm(cfg: object, ecosystems_str: str) -> None:
     from agentshield.databases.warm import warm_cache
 
-    real_cfg = cfg  # type: ignore[assignment]
+    real_cfg = cfg
 
     if ecosystems_str.lower() == "all":
         target = list(Ecosystem)
@@ -315,12 +315,11 @@ def serve(
 
     if mcp:
         import contextlib
-        import sys
 
         from agentshield.server.mcp import MCPServer
 
         server = MCPServer(shield)
-        console.print("[dim]AgentShield MCP server starting on stdio...[/dim]", file=sys.stderr)
+        Console(stderr=True).print("[dim]AgentShield MCP server starting on stdio...[/dim]")
         with contextlib.suppress(KeyboardInterrupt):
             asyncio.run(server.run_stdio())
     else:

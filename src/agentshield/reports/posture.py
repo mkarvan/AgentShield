@@ -95,8 +95,8 @@ def _installed_packages() -> list[tuple[str, str]]:
     """Return (name, version) pairs for all packages visible to importlib.metadata."""
     pkgs = []
     for dist in importlib_metadata.distributions():
-        name = dist.metadata.get("Name") or ""
-        version = dist.metadata.get("Version") or ""
+        name = dist.name
+        version = dist.metadata["Version"] or ""
         if name:
             pkgs.append((name, version))
     return pkgs

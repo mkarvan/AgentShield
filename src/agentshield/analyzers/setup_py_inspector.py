@@ -86,22 +86,17 @@ class _ASTVisitor(ast.NodeVisitor):
         chain = self._attr_chain(node.func)
 
         # T3.1 — shell execution
-        if len(chain) >= 2 and chain[-2:] in {t[-2:] for t in _SHELL_FUNCS if len(t) >= 2}:
-            self.shell_exec_lines.append(node.lineno)
-        elif len(chain) == 1 and chain[0] in _BUILTINS_EXEC:
+        if len(chain) >= 2 and chain[-2:] in {t[-2:] for t in _SHELL_FUNCS if len(t) >= 2} or len(chain) == 1 and chain[0] in _BUILTINS_EXEC:
             self.shell_exec_lines.append(node.lineno)
 
         # T3.2 — network
-        if len(chain) >= 2 and chain[-2:] in {t[-2:] for t in _NETWORK_FUNCS if len(t) >= 2}:
-            self.network_lines.append(node.lineno)
-        elif len(chain) >= 3 and chain[-3:] in {t for t in _NETWORK_FUNCS if len(t) >= 3}:
+        if len(chain) >= 2 and chain[-2:] in {t[-2:] for t in _NETWORK_FUNCS if len(t) >= 2} or len(chain) >= 3 and chain[-3:] in {t for t in _NETWORK_FUNCS if len(t) >= 3}:
             self.network_lines.append(node.lineno)
 
         # T3.3 — filesystem writes: open(path, "w"/"wb"/"a"/"ab")
         if len(chain) == 1 and chain[0] == "open" and len(node.args) >= 2:
             mode_node = node.args[1]
-            if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
-                if any(c in mode_node.value for c in ("w", "a", "x")):
+            if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str) and any(c in mode_node.value for c in ("w", "a", "x")):
                     self.filesystem_write_lines.append(node.lineno)
                     # Also check if path string mentions sensitive dirs
                     path_node = node.args[0]
@@ -122,16 +117,14 @@ class _ASTVisitor(ast.NodeVisitor):
                     self.obfuscation_lines.append(node.lineno)
 
         # T3.5 — credential harvesting: os.environ.get("*_TOKEN") etc.
-        if len(chain) >= 3 and chain[-3:] == ("os", "environ", "get"):
-            if node.args and isinstance(node.args[0], ast.Constant):
-                key = str(node.args[0].value).upper()
-                if any(p in key for p in _CRED_PATTERNS):
-                    self.cred_harvest_lines.append(node.lineno)
-        if len(chain) >= 2 and chain[-2:] in {("os", "getenv"), ("os", "environ")}:
-            if node.args and isinstance(node.args[0], ast.Constant):
-                key = str(node.args[0].value).upper()
-                if any(p in key for p in _CRED_PATTERNS):
-                    self.cred_harvest_lines.append(node.lineno)
+        if len(chain) >= 3 and chain[-3:] == ("os", "environ", "get") and node.args and isinstance(node.args[0], ast.Constant):
+            key = str(node.args[0].value).upper()
+            if any(p in key for p in _CRED_PATTERNS):
+                self.cred_harvest_lines.append(node.lineno)
+        if len(chain) >= 2 and chain[-2:] in {("os", "getenv"), ("os", "environ")} and node.args and isinstance(node.args[0], ast.Constant):
+            key = str(node.args[0].value).upper()
+            if any(p in key for p in _CRED_PATTERNS):
+                self.cred_harvest_lines.append(node.lineno)
         # os.environ.items() / dict(os.environ)
         if len(chain) >= 3 and chain[-3:] == ("os", "environ", "items"):
             self.cred_harvest_lines.append(node.lineno)
@@ -141,11 +134,10 @@ class _ASTVisitor(ast.NodeVisitor):
     def visit_Subscript(self, node: ast.Subscript) -> None:
         # os.environ["SECRET_KEY"]
         val_chain = self._attr_chain(node.value)
-        if len(val_chain) >= 2 and val_chain[-2:] == ("os", "environ"):
-            if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
-                key = node.slice.value.upper()
-                if any(p in key for p in _CRED_PATTERNS):
-                    self.cred_harvest_lines.append(node.lineno)
+        if len(val_chain) >= 2 and val_chain[-2:] == ("os", "environ") and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            key = node.slice.value.upper()
+            if any(p in key for p in _CRED_PATTERNS):
+                self.cred_harvest_lines.append(node.lineno)
         self.generic_visit(node)
 
 

@@ -120,7 +120,7 @@ async def run_bandit(package_dir: Path, request: ScanRequest) -> list[Finding]:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("bandit timed out scanning %s", package_dir)
         return []
     except Exception as exc:

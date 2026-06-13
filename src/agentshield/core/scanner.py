@@ -134,7 +134,7 @@ class AgentShield:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         findings: list[Finding] = []
-        for source, r in zip(source_names, results):
+        for source, r in zip(source_names, results, strict=False):
             if isinstance(r, list):
                 findings.extend(r)
             elif isinstance(r, Exception):
@@ -163,7 +163,7 @@ class AgentShield:
                         run_bandit(pkg_dir, request),
                         return_exceptions=True,
                     )
-                    for name, r in zip(("semgrep", "bandit"), results):
+                    for name, r in zip(("semgrep", "bandit"), results, strict=False):
                         if isinstance(r, list):
                             findings.extend(r)
                         elif isinstance(r, Exception):
@@ -214,7 +214,7 @@ class AgentShield:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         findings: list[Finding] = []
-        for source, r in zip(source_names, results):
+        for source, r in zip(source_names, results, strict=False):
             if isinstance(r, list):
                 findings.extend(r)
             elif isinstance(r, Exception):

@@ -58,7 +58,7 @@ async def run_npm_audit(package_dir: Path, request: ScanRequest) -> list[Finding
             cwd=str(package_dir),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("npm audit timed out for %s", package_dir)
         return []
     except Exception as exc:

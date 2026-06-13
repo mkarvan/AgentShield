@@ -5,7 +5,6 @@ import io
 import json
 import zipfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import respx
@@ -13,7 +12,6 @@ from httpx import Response
 
 from agentshield.core.models import Ecosystem
 from agentshield.databases.warm import (
-    WarmStats,
     _extract_affected_versions,
     _extract_severity,
     _parse_advisory,

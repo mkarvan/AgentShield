@@ -1,8 +1,6 @@
 """Unit tests for the T4.1 prompt-injection heuristic."""
 from __future__ import annotations
 
-import pytest
-
 from agentshield.analyzers.prompt_injection import check_prompt_injection
 from agentshield.core.models import Ecosystem, ScanRequest, Severity
 

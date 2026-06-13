@@ -192,7 +192,6 @@ async def test_scan_request_uses_package_from_args(tmp_path):
         name="pip_install",
         args={"package": "numpy", "version": "1.24.0"},
     )
-    req = ScanRequest(package="numpy", version="1.24.0", ecosystem=Ecosystem.PYPI)
 
     captured: list[ScanRequest] = []
 
@@ -216,7 +215,6 @@ async def test_context_hint_forwarded(tmp_path):
         name="pip_install",
         args={"package": "flask", "reason": "Building a web API"},
     )
-    req = ScanRequest(package="flask", ecosystem=Ecosystem.PYPI)
 
     captured: list[ScanRequest] = []
 

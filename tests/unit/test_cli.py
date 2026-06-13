@@ -4,10 +4,8 @@ All network calls are mocked via respx.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 import respx
 from httpx import Response
 from typer.testing import CliRunner

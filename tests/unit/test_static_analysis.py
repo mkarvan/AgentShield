@@ -217,10 +217,12 @@ async def test_deep_flag_false_skips_static_analysis(tmp_path: Path):
     })
     shield = AgentShield(config=cfg)
 
-    with patch.object(shield, "_run_checks", new_callable=AsyncMock, return_value=[]):
-        with patch.object(shield, "_run_deep_checks", new_callable=AsyncMock) as mock_deep:
-            await shield.ascan(ScanRequest(package="some-pkg", ecosystem=Ecosystem.PYPI, deep=False))
-            mock_deep.assert_not_called()
+    with (
+        patch.object(shield, "_run_checks", new_callable=AsyncMock, return_value=[]),
+        patch.object(shield, "_run_deep_checks", new_callable=AsyncMock) as mock_deep,
+    ):
+        await shield.ascan(ScanRequest(package="some-pkg", ecosystem=Ecosystem.PYPI, deep=False))
+        mock_deep.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -237,9 +239,11 @@ async def test_deep_flag_true_invokes_static_analysis(tmp_path: Path):
     })
     shield = AgentShield(config=cfg)
 
-    with patch.object(shield, "_run_checks", new_callable=AsyncMock, return_value=[]):
-        with patch.object(shield, "_run_deep_checks", new_callable=AsyncMock, return_value=[]) as mock_deep:
-            result = await shield.ascan(
-                ScanRequest(package="some-pkg", ecosystem=Ecosystem.PYPI, deep=True)
-            )
-            mock_deep.assert_called_once()
+    with (
+        patch.object(shield, "_run_checks", new_callable=AsyncMock, return_value=[]),
+        patch.object(shield, "_run_deep_checks", new_callable=AsyncMock, return_value=[]) as mock_deep,
+    ):
+        await shield.ascan(
+            ScanRequest(package="some-pkg", ecosystem=Ecosystem.PYPI, deep=True)
+        )
+        mock_deep.assert_called_once()

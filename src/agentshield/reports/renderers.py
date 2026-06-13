@@ -1,10 +1,8 @@
 """Report renderers — convert a PostureReport to various output formats."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from agentshield.core.models import Severity
 from agentshield.reports.models import PostureReport
 
 
@@ -40,8 +38,8 @@ def render_markdown(report: PostureReport) -> str:
         "",
         "## Summary",
         "",
-        f"| Field | Value |",
-        f"|-------|-------|",
+        "| Field | Value |",
+        "|-------|-------|",
         f"| Risk score | **{report.risk_score}/100 — {report.risk_label}** |",
         f"| Packages scanned | {report.packages_scanned} |",
         f"| Critical findings | {report.critical_count} |",
@@ -122,7 +120,7 @@ def render_markdown(report: PostureReport) -> str:
             lines += [f"| `{entry.package}` | {entry.ecosystem} | {sevs} | {logged} |"]
         lines += [""]
 
-    lines += ["---", "", f"*AgentShield v0.1.0*"]
+    lines += ["---", "", "*AgentShield v0.1.0*"]
     return "\n".join(lines)
 
 
@@ -155,7 +153,7 @@ def render_terminal(report: PostureReport) -> None:
 
     # Header panel
     header = Text()
-    header.append(f"Risk Score: ", style="bold")
+    header.append("Risk Score: ", style="bold")
     header.append(f"{report.risk_score}/100 — {report.risk_label}", style=label_color)
     header.append(f"  |  Generated: {ts}", style="dim")
     console.print(Panel(header, title="[bold]AgentShield Posture Report[/bold]", border_style="blue"))
@@ -215,7 +213,7 @@ def render_terminal(report: PostureReport) -> None:
         console.print("  [dim]No tools registered.[/dim]")
 
     if report.env_vars_detected:
-        console.print(f"\n  [bold]Sensitive env vars:[/bold]", end="  ")
+        console.print("\n  [bold]Sensitive env vars:[/bold]", end="  ")
         for v in report.env_vars_detected:
             console.print(f"[dim]{v}[/dim] [green]✓[/green]", end="  ")
         console.print()

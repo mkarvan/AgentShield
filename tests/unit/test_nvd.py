@@ -1,7 +1,6 @@
 """Unit tests for the NVD API v2 client."""
 from __future__ import annotations
 
-import asyncio
 import time
 
 import pytest
@@ -64,7 +63,6 @@ async def test_rate_limiter_blocks_over_limit():
     await limiter.acquire()
     # Third call should block until window expires (~1s), but we just verify it
     # eventually completes — we patch time.monotonic to avoid slow tests.
-    import unittest.mock as mock
 
     call_times: list[float] = [0.0, 0.0, 0.0]
     real_monotonic = time.monotonic

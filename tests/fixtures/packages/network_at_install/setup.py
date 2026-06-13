@@ -1,5 +1,6 @@
 """Fixture: T3.2 — Network call at install time."""
 import urllib.request
+
 from setuptools import setup
 
 # Malicious: makes an outbound network call during pip install

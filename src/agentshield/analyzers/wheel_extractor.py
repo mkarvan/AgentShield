@@ -8,9 +8,9 @@ from __future__ import annotations
 import logging
 import tempfile
 import zipfile
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
 
 import httpx
 
@@ -57,12 +57,14 @@ async def _resolve_pypi_url(package: str, version: str | None) -> str:
 
 
 async def _download(url: str, dest: Path) -> None:
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-        async with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with open(dest, "wb") as fh:
-                async for chunk in resp.aiter_bytes(65536):
-                    fh.write(chunk)
+    async with (
+        httpx.AsyncClient(timeout=60, follow_redirects=True) as client,
+        client.stream("GET", url) as resp,
+    ):
+        resp.raise_for_status()
+        with open(dest, "wb") as fh:
+            async for chunk in resp.aiter_bytes(65536):
+                fh.write(chunk)
 
 
 def _extract_wheel(wheel_path: Path, extract_to: Path) -> None:

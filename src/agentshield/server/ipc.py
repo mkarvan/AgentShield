@@ -117,8 +117,8 @@ class IPCServer:
         ecosystem_str = params.get("ecosystem", "pypi")
         try:
             ecosystem = Ecosystem(ecosystem_str.lower())
-        except ValueError:
-            raise ValueError(f"Unknown ecosystem: {ecosystem_str!r}")
+        except ValueError as err:
+            raise ValueError(f"Unknown ecosystem: {ecosystem_str!r}") from err
 
         request = ScanRequest(
             package=params["package"],

@@ -70,7 +70,7 @@ async def run_cargo_audit(package_dir: Path, request: ScanRequest) -> list[Findi
             cwd=str(package_dir),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("cargo audit timed out for %s", package_dir)
         return []
     except Exception as exc:
@@ -103,10 +103,9 @@ def _parse_cargo_audit(data: dict, request: ScanRequest) -> list[Finding]:
 
         cvss_score: float | None = None
         if cvss_str:
-            try:
+            import contextlib
+            with contextlib.suppress(ValueError, AttributeError):
                 cvss_score = float(cvss_str.split("/")[-1]) if "/" in cvss_str else float(cvss_str)
-            except (ValueError, AttributeError):
-                pass
 
         severity = _cvss_to_severity(cvss_score)
 

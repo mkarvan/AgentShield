@@ -235,7 +235,6 @@ async def test_scan_unknown_ecosystem_returns_error(tmp_path):
 @pytest.mark.asyncio
 async def test_scan_context_hint_forwarded(tmp_path):
     server = _make_server(tmp_path)
-    req = ScanRequest(package="flask", ecosystem=Ecosystem.PYPI)
 
     captured: list[ScanRequest] = []
 

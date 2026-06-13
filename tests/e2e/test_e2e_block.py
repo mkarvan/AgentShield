@@ -9,12 +9,10 @@ from __future__ import annotations
 import pytest
 
 from agentshield.core.config import Config
-from agentshield.core.models import DecisionAction, Ecosystem, ScanRequest
 from agentshield.integrations.hermes._types import ToolCall, ToolResult
 from agentshield.integrations.hermes.plugin import AgentShieldPlugin
 from agentshield.integrations.openclaw._types import SkillContext
 from agentshield.integrations.openclaw.skill import AgentShieldSkill
-
 
 # ── Hermes e2e ────────────────────────────────────────────────────────────────
 

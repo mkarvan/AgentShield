@@ -12,10 +12,12 @@ from agentshield.core.cache import ScanCache
 from agentshield.core.config import CacheConfig
 from agentshield.core.models import Finding, Severity
 from agentshield.reports.models import AsyncLogEntry, PackageSummary, PostureReport, ToolInfo
-from agentshield.reports.posture import _classify_tool, _detect_sensitive_env_vars, run_posture_check
+from agentshield.reports.posture import (
+    _classify_tool,
+    run_posture_check,
+)
 from agentshield.reports.renderers import render_html, render_json, render_markdown
 from agentshield.reports.scoring import risk_label, risk_score
-
 
 # ------------------------------------------------------------------ helpers
 

@@ -20,7 +20,11 @@ from agentshield.core.scanner import AgentShield
 try:
     from hermes.tools import ToolCall, ToolPlugin, ToolResult  # type: ignore[import-not-found]
 except ImportError:
-    from agentshield.integrations.hermes._types import ToolCall, ToolPlugin, ToolResult  # type: ignore[assignment]
+    from agentshield.integrations.hermes._types import (  # type: ignore[assignment]
+        ToolCall,
+        ToolPlugin,
+        ToolResult,
+    )
 
 _TOOL_ECOSYSTEM: dict[str, Ecosystem] = {
     "pip_install": Ecosystem.PYPI,

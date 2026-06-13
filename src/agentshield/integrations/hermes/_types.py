@@ -25,14 +25,14 @@ class ToolResult:
     """Result returned to the Hermes runtime after plugin processing."""
 
     output: str = ""
-    error: str | None = None
+    error_message: str | None = None
     _needs_confirmation: bool = False
     confirmation_message: str = ""
     on_confirm: ToolCall | None = None
 
     @classmethod
     def error(cls, message: str) -> ToolResult:
-        return cls(error=message)
+        return cls(error_message=message)
 
     @classmethod
     def needs_confirmation(cls, *, message: str, on_confirm: ToolCall) -> ToolResult:
@@ -44,7 +44,7 @@ class ToolResult:
 
     @property
     def is_error(self) -> bool:
-        return self.error is not None
+        return self.error_message is not None
 
     @property
     def requires_confirmation(self) -> bool:

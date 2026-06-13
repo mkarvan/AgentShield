@@ -6,7 +6,14 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from agentshield.core.models import DecisionAction, Ecosystem, ScanRequest, ScanResult
@@ -61,13 +68,12 @@ async def _scan_with_progress(shield: AgentShield, request: ScanRequest, *, deep
     )
 
     scan_task = asyncio.ensure_future(shield.ascan(request))
-    spinner_shown = False
 
     try:
         # Wait up to 2 s before showing the spinner
         result = await asyncio.wait_for(asyncio.shield(scan_task), timeout=_SPINNER_DELAY)
         return result
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
 
     # Scan is taking > 2 s — show a spinner until it finishes
@@ -78,7 +84,6 @@ async def _scan_with_progress(shield: AgentShield, request: ScanRequest, *, deep
         console=console,
         transient=True,
     ) as progress:
-        spinner_shown = True
         progress.add_task(_description, total=None)
         result = await scan_task
 
@@ -112,7 +117,12 @@ def posture(
     """
     from agentshield.core.config import Config
     from agentshield.reports.posture import run_posture_check
-    from agentshield.reports.renderers import render_html, render_json, render_markdown, render_terminal
+    from agentshield.reports.renderers import (
+        render_html,
+        render_json,
+        render_markdown,
+        render_terminal,
+    )
 
     cfg = Config.load(config)
     tool_names = [t.strip() for t in tools.split(",")] if tools else None
@@ -163,7 +173,7 @@ def posture(
         raise typer.Exit(code=1)
 
     if fmt == "terminal" and output:
-        console.print(f"[yellow]--output is ignored for terminal format.[/yellow]")
+        console.print("[yellow]--output is ignored for terminal format.[/yellow]")
 
 
 @app.command()
@@ -210,7 +220,6 @@ def cache(
 
 
 async def _cmd_warm(cfg: object, ecosystems_str: str) -> None:
-    from agentshield.core.config import Config
     from agentshield.databases.warm import warm_cache
 
     real_cfg = cfg  # type: ignore[assignment]
@@ -295,14 +304,14 @@ def serve(
     shield = AgentShield(config=cfg)
 
     if mcp:
-        from agentshield.server.mcp import MCPServer
+        import contextlib
+        import sys
 
+        from agentshield.server.mcp import MCPServer
         server = MCPServer(shield)
-        console.print("[dim]AgentShield MCP server starting on stdio...[/dim]", file=__import__("sys").stderr)
-        try:
+        console.print("[dim]AgentShield MCP server starting on stdio...[/dim]", file=sys.stderr)
+        with contextlib.suppress(KeyboardInterrupt):
             asyncio.run(server.run_stdio())
-        except KeyboardInterrupt:
-            pass
     else:
         from agentshield.server.ipc import DEFAULT_SOCK_PATH, IPCServer
 

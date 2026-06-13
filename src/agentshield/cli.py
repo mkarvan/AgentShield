@@ -87,11 +87,83 @@ async def _scan_with_progress(shield: AgentShield, request: ScanRequest, *, deep
 
 @app.command()
 def posture(
-    output: Path | None = typer.Option(None, "--output", "-o"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write report to this file"),
     fmt: str = typer.Option("terminal", "--format", "-f", help="terminal|json|html|markdown"),
+    tools: str | None = typer.Option(
+        None,
+        "--tools",
+        "-t",
+        help="Comma-separated list of agent tool names to classify (e.g. bash,read_file,web_search)",
+    ),
+    async_log_hours: int = typer.Option(24, "--log-hours", help="Hours of async report log to include"),
+    skip_packages: bool = typer.Option(
+        False, "--skip-packages", help="Skip installed-package CVE scan (faster)"
+    ),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
 ) -> None:
-    """Generate a security posture report for the current agent environment."""
-    console.print("[yellow]Posture check not yet implemented — coming in Phase 4.[/yellow]")
+    """Generate a security posture report for the current agent environment.
+
+    \b
+    agentshield posture                          # terminal output
+    agentshield posture --format json            # JSON to stdout
+    agentshield posture --format html -o r.html  # HTML file
+    agentshield posture --format markdown        # Markdown to stdout
+    agentshield posture --tools bash,read_file   # classify tool permissions
+    """
+    from agentshield.core.config import Config
+    from agentshield.reports.posture import run_posture_check
+    from agentshield.reports.renderers import render_html, render_json, render_markdown, render_terminal
+
+    cfg = Config.load(config)
+    tool_names = [t.strip() for t in tools.split(",")] if tools else None
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[cyan]Running posture check…[/cyan]"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("posture", total=None)
+        report = asyncio.run(
+            run_posture_check(
+                db_path=cfg.cache.db_path,
+                tool_names=tool_names,
+                async_log_hours=async_log_hours,
+                skip_package_scan=skip_packages,
+            )
+        )
+
+    if fmt == "terminal":
+        render_terminal(report)
+    elif fmt == "json":
+        text = render_json(report)
+        if output:
+            output.write_text(text)
+            console.print(f"[green]JSON report written to {output}[/green]")
+        else:
+            console.print(text)
+    elif fmt == "html":
+        text = render_html(report)
+        if output:
+            output.write_text(text)
+            console.print(f"[green]HTML report written to {output}[/green]")
+        else:
+            console.print(text)
+    elif fmt == "markdown":
+        text = render_markdown(report)
+        if output:
+            output.write_text(text)
+            console.print(f"[green]Markdown report written to {output}[/green]")
+        else:
+            console.print(text)
+    else:
+        console.print(f"[red]Unknown format: {fmt!r}[/red]")
+        console.print("Available formats: terminal | json | html | markdown")
+        raise typer.Exit(code=1)
+
+    if fmt == "terminal" and output:
+        console.print(f"[yellow]--output is ignored for terminal format.[/yellow]")
 
 
 @app.command()

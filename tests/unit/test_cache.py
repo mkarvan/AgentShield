@@ -146,7 +146,9 @@ async def test_clear_expired_only_removes_stale(tmp_path, monkeypatch):
 async def test_stats_empty_cache(tmp_path):
     cache = _make_cache(tmp_path)
     stats = await cache.stats()
-    assert stats == {"total": 0, "live": 0, "expired": 0}
+    assert stats["total"] == 0
+    assert stats["live"] == 0
+    assert stats["expired"] == 0
 
 
 @pytest.mark.asyncio

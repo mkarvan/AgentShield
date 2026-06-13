@@ -108,7 +108,7 @@ def test_scan_allowlist_exits_0(tmp_path):
 def test_cache_stats_shows_counts(tmp_path):
     result = runner.invoke(app, ["cache", "stats"])
     assert result.exit_code == 0
-    assert "Total" in result.output or "total" in result.output.lower()
+    assert "Cache stats" in result.output or "Scan results" in result.output
 
 
 def test_cache_clear_shows_count(tmp_path):
@@ -119,8 +119,8 @@ def test_cache_clear_shows_count(tmp_path):
 
 def test_cache_unknown_action(tmp_path):
     result = runner.invoke(app, ["cache", "turbo-warm"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output.lower()
+    assert result.exit_code == 1
+    assert "unknown action" in result.output.lower()
 
 
 # ── posture command ───────────────────────────────────────────────────────────

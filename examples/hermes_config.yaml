@@ -1,0 +1,23 @@
+# Example Hermes Agent configuration with AgentShield plugin enabled
+
+agent:
+  name: my-agent
+  model: claude-sonnet-4-6
+
+plugins:
+  - module: agentshield.integrations.hermes
+    class: AgentShieldPlugin
+    config:
+      # Path to AgentShield config (default: ~/.config/agentshield/config.toml)
+      config_path: ~/.config/agentshield/config.toml
+      # Override response modes for this agent specifically
+      overrides:
+        critical: block
+        high: warn_confirm
+
+tools:
+  - pip_install
+  - npm_install
+  - bash
+  - read_file
+  - write_file

@@ -1,0 +1,64 @@
+# AgentShield configuration example
+# Place at: ~/.config/agentshield/config.toml
+
+[defaults]
+critical = "block"
+high     = "warn_confirm"
+medium   = "async_report"
+low      = "ignore"
+info     = "ignore"
+
+[ecosystems.pypi]
+critical = "block"
+high     = "block"    # stricter than default for PyPI
+
+[ecosystems.npm]
+critical = "block"
+high     = "warn_confirm"
+
+[ecosystems.cargo]
+critical = "block"
+high     = "warn_confirm"
+
+[rules]
+
+  [rules."T1.2"]
+  # Typosquatting: always block, don't just warn
+  mode = "block"
+
+  [rules."T1.1"]
+  # Known malicious packages: always block
+  mode = "block"
+
+  [rules."T2.3"]
+  # Transitive (indirect) CVEs: just log, don't interrupt
+  mode = "async_report"
+
+  [rules."T3.1"]
+  # Subprocess at install time: warn and confirm
+  mode = "warn_confirm"
+
+[allowlist]
+# Packages that bypass all checks — add well-known, trusted packages here
+packages = [
+  "numpy",
+  "requests",
+  "pytest",
+  "httpx",
+  "pydantic",
+  "typer",
+  "rich",
+]
+
+[denylist]
+# Packages that are always blocked, regardless of CVE status
+packages = []
+
+[cache]
+ttl_hours  = 24
+max_entries = 50000
+# db_path defaults to ~/.agentshield/agentshield.db
+
+[reporting]
+auto_report_on_exit = true
+# report_dir defaults to ~/.agentshield/reports/

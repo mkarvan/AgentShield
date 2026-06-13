@@ -8,9 +8,10 @@ When an AI agent (Hermes, OpenClaw, Claude Code, or any MCP-compatible framework
 
 1. Checks the package against **three CVE databases** in parallel — OSV, NVD, and GitHub Advisory
 2. Detects **typosquatting** and **known-malicious packages** (offline-capable)
-3. With `--deep`: downloads the wheel and runs **static analysis** — setup.py AST inspection, semgrep, and bandit — to catch install-time malware
-4. Applies your configured **response policy** (block / warn+confirm / ignore / async-report)
-5. Caches results locally to keep latency near zero on repeated scans
+3. Runs the **T4.1 heuristic**: detects prompt-injected install requests by checking whether the package name appears in `context_hint` in patterns consistent with retrieved external content (quoted strings, code blocks, markdown links)
+4. With `--deep`: downloads the wheel and runs **static analysis** — setup.py AST inspection, semgrep, and bandit — to catch install-time malware
+5. Applies your configured **response policy** (block / warn+confirm / ignore / async-report)
+6. Caches results locally to keep latency near zero on repeated scans
 
 ## Quick start
 
@@ -146,6 +147,20 @@ allowlist always allows (bypasses all checks)
 
 ## CLI reference
 
+### `agentshield serve`
+
+```
+agentshield serve [OPTIONS]
+
+Options:
+  --mcp              Run as MCP tool server (stdio transport)
+  --socket PATH      Unix socket path (default: ~/.agentshield/agentshield.sock)
+  -c, --config PATH  Path to config.toml
+```
+
+Without `--mcp`: starts a Unix domain socket JSON-RPC 2.0 IPC server.  
+With `--mcp`: starts an MCP tool server reading from stdin and writing to stdout.
+
 ### `agentshield scan`
 
 ```
@@ -263,10 +278,157 @@ Target latency: < 50ms for a cached package. Static analysis (`--deep`) is not a
 
 ## Framework integrations
 
-- **Hermes Agent** — `pip install agentshield[hermes]` (Phase 3)
-- **OpenClaw** — `pip install agentshield[openclaw]` (Phase 3)
-- **MCP server** — `agentshield serve --mcp` (Phase 3)
-- **Claude Code hooks** — see docs (Phase 3)
+### Hermes Agent — tool plugin
+
+AgentShield registers as a Hermes tool plugin and intercepts `pip_install`, `npm_install`, and `cargo_add` calls before they execute.
+
+```python
+# agentshield.integrations.hermes.AgentShieldPlugin
+from agentshield.integrations.hermes import AgentShieldPlugin
+```
+
+Register in `hermes_config.yaml`:
+
+```yaml
+plugins:
+  - module: agentshield.integrations.hermes
+    class: AgentShieldPlugin
+    config:
+      config_path: ~/.config/agentshield/config.toml
+```
+
+**Behaviour per decision:**
+
+| Decision | Hermes result |
+|----------|--------------|
+| `ALLOW` / `LOG_ASYNC` | Original `ToolCall` passed through unmodified |
+| `NEEDS_CONFIRMATION` | `ToolResult.needs_confirmation(message, on_confirm=call)` — Hermes surfaces this to the user |
+| `BLOCK` | `ToolResult.error(reason)` — Hermes surfaces the error; agent cannot proceed |
+
+### OpenClaw — skill
+
+AgentShieldSkill is a pre-condition skill that the OpenClaw kernel calls before any triggered install action.
+
+```python
+from agentshield.integrations.openclaw import AgentShieldSkill
+```
+
+Register in `openclaw_config.yaml`:
+
+```yaml
+skills:
+  - module: agentshield.integrations.openclaw
+    class: AgentShieldSkill
+    triggers:
+      - action_type: pip_install
+      - action_type: npm_install
+      - action_type: cargo_add
+```
+
+**SkillResult fields:**
+
+```python
+SkillResult(
+    allowed=True | False,         # False → OpenClaw blocks the action
+    decision="ALLOW|BLOCK|...",   # DecisionAction value
+    findings=[...],               # list of Finding dicts
+    message="reason string",
+)
+```
+
+`LOG_ASYNC` is treated as `allowed=True` — the install proceeds but findings are logged for the next posture report.
+
+### MCP tool server
+
+`agentshield serve --mcp` starts an MCP-compliant tool server on stdio. Any MCP-compatible agent framework (Claude, others) can call AgentShield tools without a custom integration layer — this is the fastest adoption path.
+
+```bash
+# In MCP client config, add:
+{
+  "mcpServers": {
+    "agentshield": {
+      "command": "agentshield",
+      "args": ["serve", "--mcp"]
+    }
+  }
+}
+```
+
+**Exposed MCP tools:**
+
+| Tool | Description |
+|------|-------------|
+| `agentshield_scan` | Scan a package; returns `decision`, `findings`, `max_severity` |
+| `agentshield_posture` | Security posture report _(Phase 4)_ |
+
+`agentshield_scan` input schema:
+
+```json
+{
+  "package":      "string (required)",
+  "ecosystem":    "pypi | npm | cargo (required)",
+  "version":      "string (optional)",
+  "deep":         "boolean (default false)",
+  "context_hint": "string (optional) — why the agent wants this package"
+}
+```
+
+Response is a JSON string containing `decision`, `reason`, `max_severity`, `cache_hit`, `scan_duration_ms`, and `findings`.
+
+### `agentshield serve` — IPC daemon
+
+Without `--mcp`, `agentshield serve` starts a Unix domain socket JSON-RPC 2.0 server for low-latency IPC. This lets shell scripts, Claude Code hooks, and non-Python integrations call AgentShield without Python startup cost on every call.
+
+```bash
+agentshield serve                              # default: ~/.agentshield/agentshield.sock
+agentshield serve --socket /tmp/shield.sock   # custom socket path
+agentshield serve --mcp                        # MCP stdio transport
+```
+
+**IPC protocol (newline-delimited JSON):**
+
+```json
+// Request
+{"jsonrpc": "2.0", "method": "scan",
+ "params": {"package": "numpy", "ecosystem": "pypi"}, "id": 1}
+
+// Response
+{"jsonrpc": "2.0", "id": 1,
+ "result": {"decision": "ALLOW", "findings": [], "cache_hit": false}}
+```
+
+Available methods: `scan`, `ping`.
+
+### Python API (integration layers)
+
+```python
+from agentshield.integrations.hermes import AgentShieldPlugin
+from agentshield.integrations.openclaw import AgentShieldSkill
+from agentshield.core.config import Config
+
+# Hermes
+plugin = AgentShieldPlugin(config=Config.load())
+result = await plugin.before_tool_call(call)   # ToolCall | ToolResult
+
+# OpenClaw
+skill = AgentShieldSkill(config=Config.load())
+result = await skill.execute(ctx)              # SkillResult
+
+# MCP server
+from agentshield.core.scanner import AgentShield
+from agentshield.server.mcp import MCPServer
+server = MCPServer(AgentShield())
+await server.run_stdio()                       # reads stdin, writes stdout
+
+# IPC server
+from agentshield.server.ipc import IPCServer
+ipc = IPCServer(AgentShield())
+await ipc.start()                              # listens on Unix socket
+```
+
+### Claude Code hooks _(post-v1)_
+
+Claude Code's `PreToolUse` hook can invoke `agentshield hook` to intercept Bash commands containing `pip install` / `npm install` / `cargo add`. Connects to the `agentshield serve` daemon for < 5 ms latency per hook call. See PLAN.md §10.4.
 
 ## Python API
 
@@ -357,16 +519,41 @@ pytest tests/unit/test_static_analysis.py -v -k "benign"
 | T3.3 | Filesystem write outside package dir | — | ✓ |
 | T3.4 | Obfuscated/encoded payload | — | ✓ |
 | T3.5 | Credential harvesting patterns | — | ✓ |
-| T4.1 | Prompt-injected install | Heuristic (Phase 3) | Heuristic (Phase 3) |
+| T4.1 | Prompt-injected install | ✓ heuristic | ✓ heuristic |
+| T4.2 | Excessive permissions | Posture report only | Posture report only |
+| T4.3 | Context exfiltration | Posture report only | Posture report only |
+
+### T4.1 prompt-injection heuristic
+
+When a `ScanRequest` is received with a `context_hint`, AgentShield checks whether the package name appears in the hint in a pattern consistent with copy-pasted external content rather than the agent's own reasoning:
+
+- Quoted strings — `"package-name"` or `'package-name'`
+- Backtick inline code — `` `package-name` `` or `` `pip install package-name` ``
+- Fenced code blocks — ` ```pip install package-name``` `
+- Markdown links — `[package-name](https://...)`
+- Verbatim install commands — `pip install package-name`, `npm install package-name`, `cargo add package-name`
+
+When a pattern matches: **MEDIUM** severity, default response `warn_confirm`. The integration layer (Hermes / OpenClaw / MCP) surfaces this to the user for confirmation rather than silently allowing the install.
+
+Set `context_hint` in your `ScanRequest` to enable this check:
+
+```python
+ScanRequest(
+    package="some-pkg",
+    ecosystem=Ecosystem.PYPI,
+    source="hermes",
+    context_hint="The tool documentation says: pip install some-pkg",
+)
+```
 
 ## Status
 
-**Phase 2 complete.** See [PLAN.md](PLAN.md) for the full roadmap.
+**Phase 3 complete.** See [PLAN.md](PLAN.md) for the full roadmap.
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 0 | ✅ Done | Core engine, OSV client, typosquatting, cache, CLI |
 | 1 | ✅ Done | NVD client, GitHub Advisory, malicious DB, cache warm, offline mode |
 | 2 | ✅ Done | Static analysis (`--deep`): semgrep rules, bandit, setup.py AST, npm/cargo audit |
-| 3 | Planned | Framework integrations (Hermes, OpenClaw, MCP server) |
+| 3 | ✅ Done | Hermes plugin, OpenClaw skill, MCP server, IPC daemon, T4.1 heuristic |
 | 4 | Planned | Posture reports (HTML/JSON/Markdown), risk scoring |

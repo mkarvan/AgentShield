@@ -1,14 +1,73 @@
+# ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
 *.egg-info/
+.eggs/
 dist/
 build/
+wheels/
+pip-wheel-metadata/
+MANIFEST
+
+# ── Virtual environments ─────────────────────────────────────────────────────
 .venv/
 venv/
+env/
+ENV/
+
+# ── Type / lint / test caches ────────────────────────────────────────────────
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+coverage.xml
+*.cover
+
+# ── Secrets and credentials ──────────────────────────────────────────────────
+.env
+.env.*
+*.env
+secrets.toml
+credentials.json
+
+# ── SQLite databases ─────────────────────────────────────────────────────────
 *.db
+*.sqlite
+*.sqlite3
+
+# ── Generated reports ────────────────────────────────────────────────────────
 /reports/
+
+# ── Internal / planning docs (not for public repo) ──────────────────────────
+PLAN.md
+
+# ── Claude / AI dev artifacts ────────────────────────────────────────────────
+.claude/
+*.claude
+.claude_session*
+memory/
+*.memory.md
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Build / packaging artifacts ──────────────────────────────────────────────
+*.tar.gz
+*.whl
+site/

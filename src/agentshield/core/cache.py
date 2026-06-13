@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS malicious_packages (
     UNIQUE(package, ecosystem)
 );
 CREATE INDEX IF NOT EXISTS idx_malicious_pkg ON malicious_packages(package, ecosystem);
+
+CREATE TABLE IF NOT EXISTS async_report_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    package       TEXT NOT NULL,
+    version       TEXT,
+    ecosystem     TEXT NOT NULL,
+    findings_json TEXT NOT NULL,
+    reason        TEXT NOT NULL,
+    logged_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_async_log_logged ON async_report_log(logged_at);
 """
 
 
@@ -244,3 +255,44 @@ class ScanCache:
             ) as cur:
                 row = await cur.fetchone()
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------ async_report_log
+
+    async def append_async_log(
+        self,
+        package: str,
+        version: str | None,
+        ecosystem: str,
+        findings_json: str,
+        reason: str,
+    ) -> None:
+        """Append a LOG_ASYNC decision to the async report log."""
+        now = int(time.time())
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            await db.execute(
+                "INSERT INTO async_report_log (package, version, ecosystem, findings_json, reason, logged_at)"
+                " VALUES (?,?,?,?,?,?)",
+                (package.lower(), version, ecosystem.lower(), findings_json, reason, now),
+            )
+            await db.commit()
+
+    async def get_async_log(self, since_ts: int = 0) -> list[dict[str, Any]]:
+        """Return async report log entries logged after *since_ts* (unix timestamp)."""
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM async_report_log WHERE logged_at > ? ORDER BY logged_at DESC",
+                (since_ts,),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def clear_async_log(self) -> int:
+        """Delete all async report log entries. Returns row count deleted."""
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            cur = await db.execute("DELETE FROM async_report_log")
+            await db.commit()
+            return cur.rowcount or 0

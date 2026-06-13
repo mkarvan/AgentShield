@@ -33,27 +33,27 @@ Run the installation command appropriate to your environment.
 
 **Standard install (CVE checks + typosquatting only):**
 ```bash
-pip install agent-shield
+pip install git+https://github.com/mkarvan/AgentShield.git
 ```
 
 **With static analysis support (`--deep` flag):**
 ```bash
-pip install agent-shield[static-analysis]
+pip install "agentshield[static-analysis] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
 **With Hermes Agent integration:**
 ```bash
-pip install agent-shield[hermes]
+pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
 **With OpenClaw integration:**
 ```bash
-pip install agent-shield[openclaw]
+pip install "agentshield[openclaw] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
 **With everything:**
 ```bash
-pip install agent-shield[all]
+pip install "agentshield[all] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
 **Verify installation:**
@@ -225,7 +225,7 @@ Choose the section that matches your framework. If your framework is not listed,
 
 ### Framework: Hermes Agent
 
-**Prerequisites:** `pip install agentshield[hermes]` (done in Step 1 if you chose `[hermes]` or `[all]`).
+**Prerequisites:** `pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"` (done in Step 1 if you chose `[hermes]` or `[all]`).
 
 Locate your Hermes configuration file (typically `hermes_config.yaml` or `~/.hermes/config.yaml`).
 
@@ -297,7 +297,7 @@ Expected: AgentShield parses the bash command, detects `colouredlogs`, and block
 
 ### Framework: OpenClaw
 
-**Prerequisites:** `pip install agentshield[openclaw]` (done in Step 1 if you chose `[openclaw]` or `[all]`).
+**Prerequisites:** `pip install "agentshield[openclaw] @ git+https://github.com/mkarvan/AgentShield.git"` (done in Step 1 if you chose `[openclaw]` or `[all]`).
 
 Locate your OpenClaw configuration file (`openclaw_config.yaml`).
 

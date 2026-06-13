@@ -1,0 +1,77 @@
+rules:
+  - id: agentshield-T3.1-subprocess-call
+    patterns:
+      - pattern: subprocess.call(...)
+    message: "T3.1: Shell execution via subprocess.call() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.1
+      agentshield_severity: HIGH
+      category: install-time-shell
+
+  - id: agentshield-T3.1-subprocess-run
+    patterns:
+      - pattern: subprocess.run(...)
+    message: "T3.1: Shell execution via subprocess.run() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.1
+      agentshield_severity: HIGH
+      category: install-time-shell
+
+  - id: agentshield-T3.1-subprocess-popen
+    patterns:
+      - pattern: subprocess.Popen(...)
+    message: "T3.1: Shell execution via subprocess.Popen() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.1
+      agentshield_severity: HIGH
+      category: install-time-shell
+
+  - id: agentshield-T3.1-os-system
+    patterns:
+      - pattern: os.system(...)
+    message: "T3.1: Shell execution via os.system() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.1
+      agentshield_severity: HIGH
+      category: install-time-shell
+
+  - id: agentshield-T3.1-os-popen
+    patterns:
+      - pattern: os.popen(...)
+    message: "T3.1: Shell execution via os.popen() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.1
+      agentshield_severity: HIGH
+      category: install-time-shell
+
+  - id: agentshield-T3.1-eval
+    patterns:
+      - pattern: eval(...)
+    message: "T3.1: Dynamic code execution via eval() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.1
+      agentshield_severity: HIGH
+      category: install-time-shell
+
+  - id: agentshield-T3.1-exec
+    patterns:
+      - pattern: exec(...)
+    message: "T3.1: Dynamic code execution via exec() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.1
+      agentshield_severity: HIGH
+      category: install-time-shell

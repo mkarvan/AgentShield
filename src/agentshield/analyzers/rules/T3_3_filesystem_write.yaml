@@ -1,0 +1,51 @@
+rules:
+  - id: agentshield-T3.3-write-ssh-dir
+    patterns:
+      - pattern-regex: '["''].*\.ssh.*["'']'
+      - pattern: open(...)
+    message: "T3.3: Possible write to ~/.ssh directory detected at install time"
+    languages: [python]
+    severity: ERROR
+    metadata:
+      agentshield_rule: T3.3
+      agentshield_severity: CRITICAL
+      category: install-time-filesystem
+
+  - id: agentshield-T3.3-write-sensitive-path
+    pattern-either:
+      - pattern: open($PATH, "w")
+      - pattern: open($PATH, "wb")
+      - pattern: open($PATH, "a")
+      - pattern: open($PATH, "ab")
+    message: "T3.3: File open for writing detected at install time — verify target path is not sensitive"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.3
+      agentshield_severity: MEDIUM
+      category: install-time-filesystem
+
+  - id: agentshield-T3.3-shutil-copy-sensitive
+    patterns:
+      - pattern: shutil.$COPY($SRC, $DST)
+      - metavariable-regex:
+          metavariable: $COPY
+          regex: ^(copy|copy2|copyfile|move)$
+    message: "T3.3: File copy/move detected at install time — verify destination is not sensitive"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.3
+      agentshield_severity: MEDIUM
+      category: install-time-filesystem
+
+  - id: agentshield-T3.3-write-etc
+    patterns:
+      - pattern-regex: '["'']\/etc\/'
+    message: "T3.3: Possible write to /etc detected at install time"
+    languages: [python]
+    severity: ERROR
+    metadata:
+      agentshield_rule: T3.3
+      agentshield_severity: CRITICAL
+      category: install-time-filesystem

@@ -1,0 +1,80 @@
+rules:
+  - id: agentshield-T3.2-urllib-request
+    patterns:
+      - pattern: urllib.request.urlopen(...)
+    message: "T3.2: Network call via urllib.request.urlopen() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.2
+      agentshield_severity: HIGH
+      category: install-time-network
+
+  - id: agentshield-T3.2-urllib-urlopen
+    patterns:
+      - pattern: urllib.urlopen(...)
+    message: "T3.2: Network call via urllib.urlopen() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.2
+      agentshield_severity: HIGH
+      category: install-time-network
+
+  - id: agentshield-T3.2-requests-get
+    patterns:
+      - pattern: requests.get(...)
+    message: "T3.2: Network call via requests.get() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.2
+      agentshield_severity: HIGH
+      category: install-time-network
+
+  - id: agentshield-T3.2-requests-post
+    patterns:
+      - pattern: requests.post(...)
+    message: "T3.2: Network call via requests.post() detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.2
+      agentshield_severity: HIGH
+      category: install-time-network
+
+  - id: agentshield-T3.2-httpx
+    patterns:
+      - pattern: httpx.$METHOD(...)
+    message: "T3.2: Network call via httpx detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.2
+      agentshield_severity: HIGH
+      category: install-time-network
+
+  - id: agentshield-T3.2-socket-connect
+    patterns:
+      - pattern: |
+          $SOCK = socket.socket(...)
+          ...
+          $SOCK.connect(...)
+    message: "T3.2: Raw socket connection detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.2
+      agentshield_severity: HIGH
+      category: install-time-network
+
+  - id: agentshield-T3.2-http-client
+    patterns:
+      - pattern: http.client.$METHOD(...)
+    message: "T3.2: Network call via http.client detected at install time"
+    languages: [python]
+    severity: WARNING
+    metadata:
+      agentshield_rule: T3.2
+      agentshield_severity: HIGH
+      category: install-time-network

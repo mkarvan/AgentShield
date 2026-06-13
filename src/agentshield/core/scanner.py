@@ -75,6 +75,11 @@ class AgentShield:
         else:
             findings = await self._run_checks(request)
 
+        # Static analysis (--deep only) — runs after enrichment checks regardless of offline mode
+        if request.deep:
+            deep_findings = await self._run_deep_checks(request)
+            findings = _dedupe_findings(findings + deep_findings)
+
         max_sev = _max_severity(findings)
         decision = self.response_engine.decide(findings, request)
 
@@ -117,6 +122,62 @@ class AgentShield:
 
         # Deduplicate findings by rule_id (keep highest severity)
         return _dedupe_findings(findings)
+
+    async def _run_deep_checks(self, request: ScanRequest) -> list[Finding]:
+        """Download wheel and run static analysis suite (semgrep, bandit, AST inspector)."""
+        from agentshield.analyzers.bandit_runner import run_bandit
+        from agentshield.analyzers.cargo_audit_runner import run_cargo_audit
+        from agentshield.analyzers.npm_audit_runner import run_npm_audit
+        from agentshield.analyzers.semgrep_runner import run_semgrep
+        from agentshield.analyzers.setup_py_inspector import inspect_package_directory
+        from agentshield.analyzers.wheel_extractor import WheelExtractionError, extracted_package
+        from agentshield.core.models import Ecosystem
+
+        findings: list[Finding] = []
+
+        if request.ecosystem == Ecosystem.PYPI:
+            try:
+                async with extracted_package(request) as pkg_dir:
+                    results = await asyncio.gather(
+                        run_semgrep(pkg_dir, request),
+                        run_bandit(pkg_dir, request),
+                        return_exceptions=True,
+                    )
+                    for name, r in zip(("semgrep", "bandit"), results):
+                        if isinstance(r, list):
+                            findings.extend(r)
+                        elif isinstance(r, Exception):
+                            logger.warning("Deep check '%s' failed: %s", name, r)
+
+                    # AST inspector is synchronous; run directly
+                    try:
+                        ast_findings = inspect_package_directory(pkg_dir, request)
+                        findings.extend(ast_findings)
+                    except Exception as exc:
+                        logger.warning("setup_py_inspector failed: %s", exc)
+
+            except WheelExtractionError as exc:
+                logger.warning("Could not download/extract package for deep scan: %s", exc)
+            except Exception as exc:
+                logger.warning("Deep scan failed with unexpected error: %s", exc)
+
+        elif request.ecosystem == Ecosystem.NPM:
+            try:
+                async with extracted_package(request) as pkg_dir:
+                    npm_findings = await run_npm_audit(pkg_dir, request)
+                    findings.extend(npm_findings)
+            except Exception as exc:
+                logger.warning("npm deep scan failed: %s", exc)
+
+        elif request.ecosystem == Ecosystem.CARGO:
+            try:
+                async with extracted_package(request) as pkg_dir:
+                    cargo_findings = await run_cargo_audit(pkg_dir, request)
+                    findings.extend(cargo_findings)
+            except Exception as exc:
+                logger.warning("cargo deep scan failed: %s", exc)
+
+        return findings
 
     async def _run_offline_checks(self, request: ScanRequest) -> list[Finding]:
         """Offline enrichment: local SQLite only — no network calls."""

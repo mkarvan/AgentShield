@@ -1,0 +1,72 @@
+rules:
+  - id: agentshield-T3.4-base64-decode-exec
+    patterns:
+      - pattern: exec(base64.b64decode(...))
+    message: "T3.4: Obfuscated code — base64 payload decoded and executed"
+    languages: [python]
+    severity: ERROR
+    metadata:
+      agentshield_rule: T3.4
+      agentshield_severity: CRITICAL
+      category: obfuscation
+
+  - id: agentshield-T3.4-base64-decode-eval
+    patterns:
+      - pattern: eval(base64.b64decode(...))
+    message: "T3.4: Obfuscated code — base64 payload decoded and evaluated"
+    languages: [python]
+    severity: ERROR
+    metadata:
+      agentshield_rule: T3.4
+      agentshield_severity: CRITICAL
+      category: obfuscation
+
+  - id: agentshield-T3.4-base64-compile
+    patterns:
+      - pattern: |
+          $DECODED = base64.b64decode(...)
+          ...
+          compile($DECODED, ...)
+    message: "T3.4: Obfuscated code — base64 payload compiled for execution"
+    languages: [python]
+    severity: ERROR
+    metadata:
+      agentshield_rule: T3.4
+      agentshield_severity: CRITICAL
+      category: obfuscation
+
+  - id: agentshield-T3.4-decode-exec-chain
+    patterns:
+      - pattern: |
+          $X = base64.b64decode(...)
+          ...
+          exec($X)
+    message: "T3.4: Obfuscated code — base64 decoded then executed"
+    languages: [python]
+    severity: ERROR
+    metadata:
+      agentshield_rule: T3.4
+      agentshield_severity: CRITICAL
+      category: obfuscation
+
+  - id: agentshield-T3.4-marshal-loads-exec
+    patterns:
+      - pattern: exec(marshal.loads(...))
+    message: "T3.4: Obfuscated code — marshal-deserialized payload executed"
+    languages: [python]
+    severity: ERROR
+    metadata:
+      agentshield_rule: T3.4
+      agentshield_severity: CRITICAL
+      category: obfuscation
+
+  - id: agentshield-T3.4-zlib-decompress-exec
+    patterns:
+      - pattern: exec(zlib.decompress(...))
+    message: "T3.4: Obfuscated code — zlib-compressed payload executed"
+    languages: [python]
+    severity: ERROR
+    metadata:
+      agentshield_rule: T3.4
+      agentshield_severity: CRITICAL
+      category: obfuscation

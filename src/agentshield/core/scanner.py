@@ -99,6 +99,19 @@ class AgentShield:
             cache_hit=False,
         )
         await self.cache.set(request, result)
+
+        # Persist LOG_ASYNC decisions for posture report aggregation
+        if decision.action == DecisionAction.LOG_ASYNC and findings:
+            import json as _json
+
+            await self.cache.append_async_log(
+                package=request.package,
+                version=request.version,
+                ecosystem=request.ecosystem.value,
+                findings_json=_json.dumps([f.model_dump() for f in findings]),
+                reason=decision.reason,
+            )
+
         return result
 
     async def _run_checks(self, request: ScanRequest) -> list[Finding]:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
 from pathlib import Path
 
@@ -43,13 +42,47 @@ def scan(
 
     shield = AgentShield(config=cfg)
     t0 = time.monotonic()
-    result = shield.scan(request)
+    result = asyncio.run(_scan_with_progress(shield, request, deep=deep))
     wall_ms = int((time.monotonic() - t0) * 1000)
 
     _print_result(result, wall_ms)
 
     if result.decision.action == DecisionAction.BLOCK:
         raise typer.Exit(code=1)
+
+
+async def _scan_with_progress(shield: AgentShield, request: ScanRequest, *, deep: bool) -> ScanResult:
+    """Run the scan and show a Rich spinner if it exceeds 2 seconds."""
+    _SPINNER_DELAY = 2.0
+    _description = (
+        f"[cyan]Scanning {request.package} (deep mode — downloading + analyzing)…[/cyan]"
+        if deep
+        else f"[cyan]Scanning {request.package}…[/cyan]"
+    )
+
+    scan_task = asyncio.ensure_future(shield.ascan(request))
+    spinner_shown = False
+
+    try:
+        # Wait up to 2 s before showing the spinner
+        result = await asyncio.wait_for(asyncio.shield(scan_task), timeout=_SPINNER_DELAY)
+        return result
+    except asyncio.TimeoutError:
+        pass
+
+    # Scan is taking > 2 s — show a spinner until it finishes
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        spinner_shown = True
+        progress.add_task(_description, total=None)
+        result = await scan_task
+
+    return result
 
 
 @app.command()

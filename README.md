@@ -446,7 +446,10 @@ agentshield serve --socket /tmp/my.sock
 
 ### Hermes Agent — tool plugin
 
-AgentShield registers as a Hermes tool plugin and intercepts `pip_install`, `npm_install`, and `cargo_add` calls before they execute.
+AgentShield registers as a Hermes tool plugin and intercepts two categories of tool calls:
+
+- **Structured install tools** (`pip_install`, `npm_install`, `cargo_add`) — package name/version read directly from the tool call arguments.
+- **Shell tools** (`bash`, `shell`, `run_command`, `execute`, `terminal`) — command string parsed for `pip install`, `pip3 install`, `python -m pip install`, `uv pip install`, `npm install`, `npm i`, `yarn add`, `cargo add`, and `cargo install` patterns.  Flags like `--break-system-packages`, `--user`, and `-U` are handled correctly; version specifiers and extras are stripped before scanning.
 
 **Install:**
 ```bash

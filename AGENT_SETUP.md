@@ -241,6 +241,37 @@ plugins:
 
 **Restart the Hermes agent** for the plugin to take effect.
 
+#### How interception works
+
+AgentShieldPlugin intercepts two categories of tool calls:
+
+**1. Structured install tools** — `pip_install`, `npm_install`, `cargo_add`
+
+The plugin reads the package name/version directly from the tool call arguments and scans it before the install proceeds.
+
+**2. Shell/bash tools** — `bash`, `shell`, `run_command`, `execute`, `terminal`
+
+Hermes sometimes uses raw bash commands instead of structured install tools (e.g. `pip install --break-system-packages requests`). The plugin automatically parses the command string for any of the following patterns and scans each detected package before allowing the command to run:
+
+| Command pattern | Ecosystem |
+|-----------------|-----------|
+| `pip install …`, `pip3 install …` | PyPI |
+| `python -m pip install …`, `uv pip install …` | PyPI |
+| `npm install …`, `npm i …` | npm |
+| `yarn add …` | npm |
+| `cargo add …`, `cargo install …` | Cargo |
+
+Flags like `--break-system-packages`, `--user`, `-U`, and value-taking flags like `-r requirements.txt` are correctly handled (stripped during parsing). Version specifiers and extras (`requests[security]==2.28.0`) are stripped to extract the bare package name.
+
+If Hermes uses a different tool name for shell execution, add it to the `intercepts` list by subclassing:
+
+```python
+from agentshield.integrations.hermes.plugin import AgentShieldPlugin, _SHELL_TOOLS
+
+class MyAgentShieldPlugin(AgentShieldPlugin):
+    intercepts = [*AgentShieldPlugin.intercepts, "run_bash", "exec_cmd"]
+```
+
 **Verify:**
 Ask the Hermes agent to install a package. It should pause and either allow, warn+confirm, or block depending on your config.
 
@@ -255,6 +286,12 @@ To test blocking:
 <hermes agent> Please install the 'colouredlogs' package.
 ```
 Expected: AgentShield blocks with a message about the package being on the denylist (if you added it) or flags a finding.
+
+To test that bash command interception works:
+```
+<hermes agent> Run: pip install --break-system-packages colouredlogs
+```
+Expected: AgentShield parses the bash command, detects `colouredlogs`, and blocks it.
 
 ---
 
@@ -511,6 +548,14 @@ If OSV is unreachable, check your network. The OSV bulk export URL is `https://o
 2. Check that `agentshield[hermes]` / `agentshield[openclaw]` was installed (not just `agentshield`).
 
 3. Ensure the Hermes/OpenClaw agent was **restarted** after editing the config file.
+
+4. **If Hermes runs install commands via a `bash` or `shell` tool** and the plugin still doesn't fire, confirm that the tool name used by Hermes appears in `AgentShieldPlugin.intercepts`:
+   ```python
+   from agentshield.integrations.hermes import AgentShieldPlugin
+   print(AgentShieldPlugin.intercepts)
+   # ['bash', 'cargo_add', 'execute', 'npm_install', 'pip_install', 'run_command', 'shell', 'terminal']
+   ```
+   If your Hermes agent uses a different tool name (e.g. `run_bash`), subclass the plugin and add the name to `intercepts` as described in the setup section above.
 
 ---
 

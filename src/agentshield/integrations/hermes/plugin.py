@@ -1,7 +1,15 @@
 """Hermes Agent tool plugin for AgentShield.
 
-Intercepts ``pip_install``, ``npm_install``, and ``cargo_add`` tool calls
-and runs a security scan before allowing them to proceed.
+Intercepts two categories of tool calls:
+
+1. **Structured install tools** — ``pip_install``, ``npm_install``, ``cargo_add``:
+   package name/version come directly from the tool call arguments.
+
+2. **Shell tools** — ``bash``, ``shell``, ``run_command``, ``execute``, ``terminal``:
+   the command string is parsed for ``pip install``, ``pip3 install``,
+   ``python -m pip install``, ``uv pip install``, ``npm install``, ``npm i``,
+   ``yarn add``, ``cargo add``, and ``cargo install`` patterns.  Each detected
+   package is scanned before the command is allowed to run.
 
 Usage in ``hermes_config.yaml``::
 
@@ -12,6 +20,7 @@ Usage in ``hermes_config.yaml``::
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from agentshield.core.config import Config
@@ -27,11 +36,164 @@ except ImportError:
         ToolResult,
     )
 
+# ── structured tool-call mapping ─────────────────────────────────────────────
+
 _TOOL_ECOSYSTEM: dict[str, Ecosystem] = {
     "pip_install": Ecosystem.PYPI,
     "npm_install": Ecosystem.NPM,
     "cargo_add": Ecosystem.CARGO,
 }
+
+# ── shell tool names ──────────────────────────────────────────────────────────
+
+_SHELL_TOOLS = frozenset({"bash", "shell", "run_command", "execute", "terminal"})
+
+# ── install-command detection regexes ────────────────────────────────────────
+
+# Each tuple: (pattern that captures the argument portion, ecosystem).
+# The argument portion is everything after the install subcommand up to a shell
+# statement boundary (newline, ; & | characters).
+_INSTALL_PATTERNS: list[tuple[re.Pattern[str], Ecosystem]] = [
+    (
+        re.compile(
+            r"(?:pip3?|python3?(?:\.\d+)?\s+-m\s+pip|uv\s+pip)\s+install"
+            r"\s+((?:[^\n;&|]|\\\n)+)",
+            re.IGNORECASE,
+        ),
+        Ecosystem.PYPI,
+    ),
+    (
+        re.compile(
+            r"npm\s+(?:install|i)\s+((?:[^\n;&|]|\\\n)+)",
+            re.IGNORECASE,
+        ),
+        Ecosystem.NPM,
+    ),
+    (
+        re.compile(
+            r"yarn\s+add\s+((?:[^\n;&|]|\\\n)+)",
+            re.IGNORECASE,
+        ),
+        Ecosystem.NPM,
+    ),
+    (
+        re.compile(
+            r"cargo\s+(?:add|install)\s+((?:[^\n;&|]|\\\n)+)",
+            re.IGNORECASE,
+        ),
+        Ecosystem.CARGO,
+    ),
+]
+
+# Flags that consume the next token when written without = (e.g. -r req.txt vs --requirement=req.txt)
+_VALUE_FLAGS = frozenset(
+    {
+        # pip / pip3 / uv pip
+        "-t",
+        "--target",
+        "-d",
+        "--download",
+        "-i",
+        "--index-url",
+        "--extra-index-url",
+        "-r",
+        "--requirement",
+        "-c",
+        "--constraint",
+        "-f",
+        "--find-links",
+        "--trusted-host",
+        "--proxy",
+        "--retries",
+        "--timeout",
+        "--exists-action",
+        "--cert",
+        "--client-cert",
+        "--cache-dir",
+        "-e",
+        "--editable",
+        "--platform",
+        "--python-version",
+        "--abi",
+        "--implementation",
+        "--prefix",
+        "--src",
+        "--root",
+        # npm
+        "--registry",
+        "--tag",
+        "--scope",
+        "-w",
+        "--workspace",
+        # cargo
+        "--version",
+        "-p",
+        "--package",
+        "--manifest-path",
+        # yarn
+        "--cwd",
+    }
+)
+
+# Matches a valid package spec and captures the bare name in group 1.
+# Handles: requests, requests==2.28.0, requests[security], requests[security]>=2
+_PKG_SPEC_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(?:[><=!~^@][^\s]*)?$")
+
+
+# ── helpers (module-level, testable) ─────────────────────────────────────────
+
+
+def _extract_command(args: dict) -> str | None:
+    """Return the shell command string from a tool call's args dict."""
+    for key in ("command", "cmd", "code"):
+        val = args.get(key)
+        if isinstance(val, str):
+            return val
+    return None
+
+
+def _parse_shell_packages(command: str) -> list[tuple[str, Ecosystem]]:
+    """Scan *command* for package-install invocations.
+
+    Returns a list of ``(bare_package_name, ecosystem)`` pairs, one per
+    package found across all install invocations in the command string.
+    """
+    results: list[tuple[str, Ecosystem]] = []
+    for pattern, ecosystem in _INSTALL_PATTERNS:
+        for match in pattern.finditer(command):
+            for pkg in _tokenize_packages(match.group(1)):
+                results.append((pkg, ecosystem))
+    return results
+
+
+def _tokenize_packages(args_str: str) -> list[str]:
+    """Extract bare package names from the argument portion of an install command."""
+    # Normalize POSIX line continuations (backslash-newline)
+    args_str = re.sub(r"\\\n", " ", args_str)
+    tokens = args_str.split()
+    packages: list[str] = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token.startswith("-"):
+            # Skip value-taking flags along with their argument
+            if token in _VALUE_FLAGS and "=" not in token:
+                i += 2
+            else:
+                i += 1
+            continue
+        # Skip filesystem paths and URLs
+        if re.match(r"^(?:[/~.]|https?://)", token):
+            i += 1
+            continue
+        m = _PKG_SPEC_RE.match(token)
+        if m:
+            packages.append(m.group(1))
+        i += 1
+    return packages
+
+
+# ── plugin ────────────────────────────────────────────────────────────────────
 
 
 class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
@@ -42,7 +204,7 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
     """
 
     name = "agentshield"
-    intercepts = list(_TOOL_ECOSYSTEM.keys())
+    intercepts = [*_TOOL_ECOSYSTEM.keys(), *sorted(_SHELL_TOOLS)]
 
     def __init__(
         self,
@@ -53,9 +215,15 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
 
     async def before_tool_call(self, call: ToolCall) -> ToolCall | ToolResult:
         """Scan the requested package; return ToolResult on block/warn, else pass call through."""
-        if call.name not in _TOOL_ECOSYSTEM:
-            return call
+        if call.name in _SHELL_TOOLS:
+            return await self._handle_shell_call(call)
+        if call.name in _TOOL_ECOSYSTEM:
+            return await self._handle_tool_call(call)
+        return call
 
+    # ── structured tool handlers ──────────────────────────────────────────────
+
+    async def _handle_tool_call(self, call: ToolCall) -> ToolCall | ToolResult:
         request = self._build_scan_request(call)
         result = await self.shield.ascan(request)
 
@@ -68,10 +236,49 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
                 on_confirm=call,
             )
 
-        # ALLOW or LOG_ASYNC: pass the tool call through unmodified
         return call
 
-    # ── helpers ──────────────────────────────────────────────────────────────
+    # ── shell command handler ─────────────────────────────────────────────────
+
+    async def _handle_shell_call(self, call: ToolCall) -> ToolCall | ToolResult:
+        command = _extract_command(call.args)
+        if not command:
+            return call
+
+        pkg_list = _parse_shell_packages(command)
+        if not pkg_list:
+            return call
+
+        blocked_messages: list[str] = []
+        confirmation_findings: list[Finding] = []
+
+        for pkg_name, ecosystem in pkg_list:
+            request = ScanRequest(
+                package=pkg_name,
+                ecosystem=ecosystem,
+                source="hermes",
+            )
+            result = await self.shield.ascan(request)
+            if result.decision.action == DecisionAction.BLOCK:
+                blocked_messages.append(f"{pkg_name}: {result.decision.reason}")
+            elif result.decision.action == DecisionAction.NEEDS_CONFIRMATION:
+                confirmation_findings.extend(result.findings)
+
+        if blocked_messages:
+            return ToolResult.error(
+                "AgentShield blocked shell command — unsafe packages detected:\n"
+                + "\n".join(f"  • {m}" for m in blocked_messages)
+            )
+
+        if confirmation_findings:
+            return ToolResult.needs_confirmation(
+                message=self._format_findings(confirmation_findings),
+                on_confirm=call,
+            )
+
+        return call
+
+    # ── helpers ───────────────────────────────────────────────────────────────
 
     def _build_scan_request(self, call: ToolCall) -> ScanRequest:
         ecosystem = _TOOL_ECOSYSTEM[call.name]

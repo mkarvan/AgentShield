@@ -2,7 +2,12 @@
 
 Install with: pip install agentshield[hermes]
 
-Register in your Hermes config:
+Register in your Hermes config::
+
     plugins:
-      - agentshield.integrations.hermes.AgentShieldPlugin
+      - module: agentshield.integrations.hermes
+        class: AgentShieldPlugin
 """
+from agentshield.integrations.hermes.plugin import AgentShieldPlugin
+
+__all__ = ["AgentShieldPlugin"]

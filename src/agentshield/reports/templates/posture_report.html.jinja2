@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentShield Posture Report — {{ report.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2d3142;
+      --text: #e2e8f0;
+      --muted: #8b95a9;
+      --critical: #ff4d4f;
+      --high: #ff7a00;
+      --medium: #fadb14;
+      --low: #52c41a;
+      --info: #1677ff;
+      --none: #8b95a9;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.6; }
+    header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 20px 32px; display: flex; align-items: center; gap: 16px; }
+    header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+    header .timestamp { color: var(--muted); font-size: 13px; }
+    .shield-icon { width: 32px; height: 32px; }
+    main { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+
+    /* Score card */
+    .score-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px 32px;
+      display: grid;
+      grid-template-columns: auto 1fr auto auto auto auto;
+      gap: 0 40px;
+      align-items: center;
+      margin-bottom: 32px;
+    }
+    .score-value { font-size: 56px; font-weight: 800; line-height: 1; }
+    .score-label { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 4px; }
+    .score-divider { width: 1px; height: 60px; background: var(--border); }
+    .stat-block { text-align: center; }
+    .stat-number { font-size: 28px; font-weight: 700; line-height: 1.1; }
+    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+    .severity-CRITICAL { color: var(--critical); }
+    .severity-HIGH     { color: var(--high); }
+    .severity-MEDIUM   { color: var(--medium); }
+    .severity-LOW      { color: var(--low); }
+    .severity-INFO     { color: var(--info); }
+    .severity-NONE     { color: var(--none); }
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .badge-CRITICAL { background: rgba(255,77,79,0.15); color: var(--critical); border: 1px solid rgba(255,77,79,0.3); }
+    .badge-HIGH     { background: rgba(255,122,0,0.15); color: var(--high);     border: 1px solid rgba(255,122,0,0.3); }
+    .badge-MEDIUM   { background: rgba(250,219,20,0.12); color: var(--medium); border: 1px solid rgba(250,219,20,0.3); }
+    .badge-LOW      { background: rgba(82,196,26,0.12); color: var(--low);     border: 1px solid rgba(82,196,26,0.3); }
+    .badge-INFO     { background: rgba(22,119,255,0.12); color: var(--info);   border: 1px solid rgba(22,119,255,0.3); }
+    .badge-NONE     { background: rgba(139,149,169,0.12); color: var(--none);  border: 1px solid rgba(139,149,169,0.3); }
+
+    /* Sections */
+    section { margin-bottom: 32px; }
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+      margin-bottom: 16px;
+    }
+
+    /* Finding cards */
+    .finding-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 10px;
+    }
+    .finding-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+    .finding-title { font-weight: 600; font-size: 14px; flex: 1; }
+    .finding-package { color: var(--muted); font-size: 12px; }
+    .finding-desc { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+    .finding-meta { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
+    .finding-remediation { margin-top: 8px; font-size: 12px; color: #52c41a; }
+    .finding-remediation::before { content: "Fix: "; font-weight: 600; }
+
+    /* Tool list */
+    .tool-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tool-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+    .tool-dot { width: 7px; height: 7px; border-radius: 50%; }
+    .tool-dot-high   { background: var(--critical); }
+    .tool-dot-medium { background: var(--medium); }
+    .tool-dot-low    { background: var(--low); }
+
+    /* Async log */
+    .async-log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .async-log-table th { background: var(--surface); color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.07em; padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+    .async-log-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    .async-log-table tr:last-child td { border-bottom: none; }
+    .async-log-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+
+    /* Env vars */
+    .env-chip {
+      display: inline-block;
+      background: rgba(139,149,169,0.1);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--muted);
+      margin: 3px;
+    }
+    .check-mark { color: #52c41a; }
+
+    /* Empty state */
+    .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+
+    /* Package table */
+    .pkg-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .pkg-table th { background: var(--surface); color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.07em; padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+    .pkg-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
+    .pkg-table tr:last-child td { border-bottom: none; }
+    .pkg-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; max-height: 400px; overflow-y: auto; }
+
+    footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; border-top: 1px solid var(--border); margin-top: 40px; }
+  </style>
+</head>
+<body>
+<header>
+  <svg class="shield-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M16 3L4 8v8c0 7.18 5.18 13.9 12 15.92C22.82 29.9 28 23.18 28 16V8L16 3z" fill="#1677ff" opacity=".18"/>
+    <path d="M16 3L4 8v8c0 7.18 5.18 13.9 12 15.92C22.82 29.9 28 23.18 28 16V8L16 3z" stroke="#1677ff" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M11 16l3.5 3.5L21 12" stroke="#52c41a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <div>
+    <h1>AgentShield Posture Report</h1>
+    <div class="timestamp">Generated {{ report.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}</div>
+  </div>
+</header>
+
+<main>
+  <!-- Summary score card -->
+  <div class="score-card">
+    <div>
+      <div class="score-value severity-{{ report.risk_label }}">{{ report.risk_score }}</div>
+      <div class="score-label severity-{{ report.risk_label }}">{{ report.risk_label }}</div>
+    </div>
+    <div class="score-divider"></div>
+    <div class="stat-block">
+      <div class="stat-number severity-CRITICAL">{{ report.critical_count }}</div>
+      <div class="stat-label">Critical</div>
+    </div>
+    <div class="stat-block">
+      <div class="stat-number severity-HIGH">{{ report.high_count }}</div>
+      <div class="stat-label">High</div>
+    </div>
+    <div class="stat-block">
+      <div class="stat-number severity-MEDIUM">{{ report.medium_count }}</div>
+      <div class="stat-label">Medium</div>
+    </div>
+    <div class="stat-block">
+      <div class="stat-number severity-LOW">{{ report.low_count }}</div>
+      <div class="stat-label">Low</div>
+    </div>
+  </div>
+
+  <!-- Critical findings -->
+  {% if report.critical_findings %}
+  <section>
+    <div class="section-title">Critical Findings</div>
+    {% for pkg, finding in report.critical_findings %}
+    <div class="finding-card">
+      <div class="finding-header">
+        <span class="badge badge-CRITICAL">CRITICAL</span>
+        {% if finding.cvss_score is not none %}
+          <span style="font-size:12px;color:var(--muted);">CVSS {{ "%.1f"|format(finding.cvss_score) }}</span>
+        {% endif %}
+        <span class="finding-title">{{ finding.title }}</span>
+        <span class="finding-package">{{ pkg }}</span>
+      </div>
+      {% if finding.description %}
+      <div class="finding-desc">{{ finding.description[:300] }}</div>
+      {% endif %}
+      <div class="finding-meta">
+        <span>{{ finding.rule_id }}</span>
+        <span>Source: {{ finding.source }}</span>
+      </div>
+      {% if finding.remediation %}
+      <div class="finding-remediation">{{ finding.remediation }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <!-- High findings -->
+  {% if report.high_findings %}
+  <section>
+    <div class="section-title">High Findings</div>
+    {% for pkg, finding in report.high_findings %}
+    <div class="finding-card">
+      <div class="finding-header">
+        <span class="badge badge-HIGH">HIGH</span>
+        {% if finding.cvss_score is not none %}
+          <span style="font-size:12px;color:var(--muted);">CVSS {{ "%.1f"|format(finding.cvss_score) }}</span>
+        {% endif %}
+        <span class="finding-title">{{ finding.title }}</span>
+        <span class="finding-package">{{ pkg }}</span>
+      </div>
+      {% if finding.description %}
+      <div class="finding-desc">{{ finding.description[:300] }}</div>
+      {% endif %}
+      <div class="finding-meta">
+        <span>{{ finding.rule_id }}</span>
+        <span>Source: {{ finding.source }}</span>
+      </div>
+      {% if finding.remediation %}
+      <div class="finding-remediation">{{ finding.remediation }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <!-- Attack surface -->
+  <section>
+    <div class="section-title">Attack Surface</div>
+    {% if report.tools %}
+    <div style="margin-bottom:16px;">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+        {{ report.tools|length }} registered tool(s) —
+        {{ report.high_risk_tools|length }} high-risk,
+        {{ report.medium_risk_tools|length }} medium-risk
+      </div>
+      <div class="tool-grid">
+        {% for tool in report.tools %}
+        <div class="tool-chip">
+          <div class="tool-dot tool-dot-{{ tool.risk_level }}"></div>
+          {{ tool.name }}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <div class="empty">No tools registered — run with <code>--tools</code> to analyse tool permissions.</div>
+    {% endif %}
+
+    {% if report.env_vars_detected %}
+    <div style="margin-top:16px;">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Sensitive environment variables detected:</div>
+      {% for var in report.env_vars_detected %}
+      <span class="env-chip">{{ var }} <span class="check-mark">✓</span></span>
+      {% endfor %}
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">(values are not read or stored)</div>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- Async report log -->
+  <section>
+    <div class="section-title">Async Report Log (last 24 h)</div>
+    {% if report.async_log_entries %}
+    <div style="margin-bottom:12px;font-size:13px;color:var(--muted);">
+      {{ report.async_log_entries|length }} package(s) installed without real-time check (async_report mode)
+      {% if report.async_log_medium_plus_count > 0 %}
+      — <span style="color:var(--medium);">{{ report.async_log_medium_plus_count }} with MEDIUM+ findings — review recommended</span>
+      {% endif %}
+    </div>
+    <div class="async-log-wrap">
+      <table class="async-log-table">
+        <thead>
+          <tr>
+            <th>Package</th>
+            <th>Ecosystem</th>
+            <th>Findings</th>
+            <th>Reason</th>
+            <th>Logged</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in report.async_log_entries %}
+          <tr>
+            <td><strong>{{ entry.package }}</strong>{% if entry.version %} <span style="color:var(--muted);">{{ entry.version }}</span>{% endif %}</td>
+            <td>{{ entry.ecosystem }}</td>
+            <td>
+              {% if entry.findings %}
+                {% for f in entry.findings %}
+                  <span class="badge badge-{{ f.severity.value }}">{{ f.severity.value }}</span>
+                {% endfor %}
+              {% else %}
+                <span style="color:var(--muted);">none</span>
+              {% endif %}
+            </td>
+            <td style="color:var(--muted);">{{ entry.reason[:80] }}</td>
+            <td style="color:var(--muted);white-space:nowrap;">{{ entry.logged_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">No async-report log entries in the last 24 hours.</div>
+    {% endif %}
+  </section>
+
+  <!-- Scanned packages (with findings) -->
+  {% set flagged = report.package_summaries | selectattr('findings') | list %}
+  {% if flagged %}
+  <section>
+    <div class="section-title">Packages with Findings ({{ flagged|length }} of {{ report.packages_scanned }} scanned)</div>
+    <div class="pkg-wrap">
+      <table class="pkg-table">
+        <thead>
+          <tr>
+            <th>Package</th>
+            <th>Version</th>
+            <th>Max Severity</th>
+            <th>Findings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ps in flagged | sort(attribute='max_severity.value', reverse=True) %}
+          <tr>
+            <td><strong>{{ ps.name }}</strong></td>
+            <td style="color:var(--muted);">{{ ps.version or '—' }}</td>
+            <td><span class="badge badge-{{ ps.max_severity.value }}">{{ ps.max_severity.value }}</span></td>
+            <td>{{ ps.findings|length }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+</main>
+
+<footer>
+  AgentShield v0.1.0 — <a href="https://github.com/yourusername/agentshield" style="color:var(--muted);">github.com/yourusername/agentshield</a>
+</footer>
+</body>
+</html>

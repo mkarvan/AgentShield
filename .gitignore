@@ -11,4 +11,4 @@ venv/
 .coverage
 htmlcov/
 *.db
-reports/
+/reports/

@@ -203,6 +203,46 @@ async def _cmd_warm(cfg: object, ecosystems_str: str) -> None:
             console.print(f"  • {err}")
 
 
+@app.command()
+def serve(
+    mcp: bool = typer.Option(False, "--mcp", help="Run as MCP tool server (stdio transport)"),
+    socket: Path | None = typer.Option(
+        None, "--socket", help="Unix socket path (default: ~/.agentshield/agentshield.sock)"
+    ),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+) -> None:
+    """Start the AgentShield daemon.
+
+    \b
+    agentshield serve           Unix socket JSON-RPC IPC server
+    agentshield serve --mcp     MCP tool server on stdio (for MCP-compatible agents)
+    """
+    from agentshield.core.config import Config
+
+    cfg = Config.load(config)
+    shield = AgentShield(config=cfg)
+
+    if mcp:
+        from agentshield.server.mcp import MCPServer
+
+        server = MCPServer(shield)
+        console.print("[dim]AgentShield MCP server starting on stdio...[/dim]", file=__import__("sys").stderr)
+        try:
+            asyncio.run(server.run_stdio())
+        except KeyboardInterrupt:
+            pass
+    else:
+        from agentshield.server.ipc import DEFAULT_SOCK_PATH, IPCServer
+
+        sock_path = socket or DEFAULT_SOCK_PATH
+        server_ipc = IPCServer(shield, sock_path=sock_path)
+        console.print(f"[dim]AgentShield IPC server starting on {sock_path}...[/dim]")
+        try:
+            asyncio.run(server_ipc.start())
+        except KeyboardInterrupt:
+            console.print("\n[dim]AgentShield IPC server stopped.[/dim]")
+
+
 def _print_result(result: ScanResult, wall_ms: int | None = None) -> None:
     action = result.decision.action
     color = {

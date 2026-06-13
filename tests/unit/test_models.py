@@ -29,6 +29,33 @@ def test_severity_max():
     assert max(sevs) == Severity.CRITICAL
 
 
+def test_severity_le_ge():
+    assert Severity.HIGH <= Severity.HIGH
+    assert Severity.HIGH <= Severity.CRITICAL
+    assert Severity.CRITICAL >= Severity.HIGH
+    assert Severity.MEDIUM >= Severity.MEDIUM
+
+
+def test_severity_comparison_with_non_severity_returns_not_implemented():
+    result = Severity.HIGH.__lt__("not a severity")
+    assert result is NotImplemented
+    result = Severity.HIGH.__le__("not a severity")
+    assert result is NotImplemented
+    result = Severity.HIGH.__gt__("not a severity")
+    assert result is NotImplemented
+    result = Severity.HIGH.__ge__("not a severity")
+    assert result is NotImplemented
+    result = Severity.HIGH.__eq__("not a severity")
+    assert result is NotImplemented
+
+
+def test_severity_hashable():
+    seen = {Severity.HIGH, Severity.CRITICAL, Severity.HIGH}
+    assert len(seen) == 2
+    mapping = {Severity.CRITICAL: "crit", Severity.HIGH: "high"}
+    assert mapping[Severity.CRITICAL] == "crit"
+
+
 # ── Finding validation ────────────────────────────────────────────────────────
 
 def _finding(**overrides) -> Finding:

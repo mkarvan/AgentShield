@@ -133,3 +133,25 @@ def test_ecosystem_override_affects_decision():
     findings = [_finding("RULE", Severity.HIGH)]
     decision = engine.decide(findings, req)
     assert decision.action == DecisionAction.BLOCK
+
+
+def test_all_ignored_findings_returns_allow_with_reason():
+    """When every finding is set to IGNORE, decide() returns ALLOW with the
+    'suppressed' reason string (exercises the _build_reason ALLOW branch)."""
+    config = Config.model_validate({
+        "defaults": {
+            "critical": "ignore",
+            "high": "ignore",
+            "medium": "ignore",
+            "low": "ignore",
+            "info": "ignore",
+        }
+    })
+    engine = ResponseEngine(config)
+    findings = [
+        _finding("CVE-LOW", Severity.LOW),
+        _finding("CVE-HIGH", Severity.HIGH),
+    ]
+    decision = engine.decide(findings, _request())
+    assert decision.action == DecisionAction.ALLOW
+    assert "suppressed" in decision.reason.lower() or "ignore" in decision.reason.lower()

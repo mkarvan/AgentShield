@@ -1,0 +1,4 @@
+include LICENSE
+include README.md
+recursive-include src/agentshield/databases/data *.json
+recursive-include src/agentshield/analyzers/data *.json

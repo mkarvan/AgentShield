@@ -1,4 +1,5 @@
 """Unit tests for the OSV bulk cache warm-up module."""
+
 from __future__ import annotations
 
 import io
@@ -61,22 +62,27 @@ def _make_adv(
 
 # ── _severity_from_score ──────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("score,expected", [
-    (9.5, "CRITICAL"),
-    (9.0, "CRITICAL"),
-    (8.9, "HIGH"),
-    (7.0, "HIGH"),
-    (6.9, "MEDIUM"),
-    (4.0, "MEDIUM"),
-    (3.9, "LOW"),
-    (0.1, "LOW"),
-    (0.0, "INFO"),
-])
+
+@pytest.mark.parametrize(
+    "score,expected",
+    [
+        (9.5, "CRITICAL"),
+        (9.0, "CRITICAL"),
+        (8.9, "HIGH"),
+        (7.0, "HIGH"),
+        (6.9, "MEDIUM"),
+        (4.0, "MEDIUM"),
+        (3.9, "LOW"),
+        (0.1, "LOW"),
+        (0.0, "INFO"),
+    ],
+)
 def test_severity_from_score(score: float, expected: str):
     assert _severity_from_score(score) == expected
 
 
 # ── _extract_severity ─────────────────────────────────────────────────────────────
+
 
 def test_extract_severity_from_database_specific():
     adv = {"database_specific": {"severity": "CRITICAL"}, "severity": []}
@@ -111,14 +117,11 @@ def test_extract_severity_fallback_to_medium():
 
 # ── _extract_affected_versions ────────────────────────────────────────────────────
 
+
 def test_extract_affected_versions():
     adv = {
         "affected": [
-            {
-                "ranges": [
-                    {"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.2.3"}]}
-                ]
-            }
+            {"ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.2.3"}]}]}
         ]
     }
     result = _extract_affected_versions(adv)
@@ -133,6 +136,7 @@ def test_extract_affected_versions_empty():
 
 
 # ── _parse_advisory ─────────────────────────────────────────────────────────────
+
 
 def test_parse_advisory_cve_row():
     adv = _make_adv(severity="HIGH")
@@ -188,6 +192,7 @@ def test_parse_advisory_no_package_skips():
 
 
 # ── warm_cache ───────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 @respx.mock
@@ -254,9 +259,9 @@ async def test_warm_cache_multiple_ecosystems(tmp_path: Path):
 
     for eco_name in ["PyPI", "npm", "crates.io"]:
         advisories = [_make_adv(f"ADV-{eco_name}-001", "pkg", ecosystem=eco_name)]
-        respx.get(
-            f"https://osv-vulnerabilities.storage.googleapis.com/{eco_name}/all.zip"
-        ).mock(return_value=Response(200, content=_make_zip(advisories)))
+        respx.get(f"https://osv-vulnerabilities.storage.googleapis.com/{eco_name}/all.zip").mock(
+            return_value=Response(200, content=_make_zip(advisories))
+        )
 
     stats = await warm_cache(db_path, ecosystems=list(Ecosystem))
     assert len(stats.ecosystems_processed) == 3

@@ -3,6 +3,7 @@
 These tests exercise the full plugin → scanner → response-engine pipeline
 using mocked enrichment calls (no real network access).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -111,13 +112,17 @@ async def test_blocked_package_returns_tool_error(tmp_path):
         source="malicious_db",
     )
 
-    with patch.object(plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))):
+    with patch.object(
+        plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))
+    ):
         result = await plugin.before_tool_call(call)
 
     assert isinstance(result, ToolResult)
     assert result.is_error
-    assert "blocked" in (result.error or "").lower()
-    assert "pip_install" in (result.error or "") or "evil-pkg" in (result.error or "")
+    assert "blocked" in (result.error_message or "").lower()
+    assert "pip_install" in (result.error_message or "") or "evil-pkg" in (
+        result.error_message or ""
+    )
 
 
 @pytest.mark.asyncio
@@ -132,7 +137,9 @@ async def test_blocked_npm_package(tmp_path):
         source="malicious_db",
     )
 
-    with patch.object(plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))):
+    with patch.object(
+        plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))
+    ):
         result = await plugin.before_tool_call(call)
 
     assert isinstance(result, ToolResult)
@@ -151,7 +158,9 @@ async def test_blocked_cargo_package(tmp_path):
         source="malicious_db",
     )
 
-    with patch.object(plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))):
+    with patch.object(
+        plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))
+    ):
         result = await plugin.before_tool_call(call)
 
     assert isinstance(result, ToolResult)
@@ -173,7 +182,9 @@ async def test_warn_package_returns_confirmation_request(tmp_path):
         source="osv",
     )
 
-    with patch.object(plugin.shield, "ascan", new=AsyncMock(return_value=_warn_result(req, finding))):
+    with patch.object(
+        plugin.shield, "ascan", new=AsyncMock(return_value=_warn_result(req, finding))
+    ):
         result = await plugin.before_tool_call(call)
 
     assert isinstance(result, ToolResult)
@@ -240,4 +251,7 @@ async def test_denylist_blocks_via_plugin(tmp_path):
 
     assert isinstance(result, ToolResult)
     assert result.is_error
-    assert "colouredlogs" in (result.error or "").lower() or "blocked" in (result.error or "").lower()
+    assert (
+        "colouredlogs" in (result.error_message or "").lower()
+        or "blocked" in (result.error_message or "").lower()
+    )

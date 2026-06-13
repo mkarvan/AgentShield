@@ -1,4 +1,5 @@
 """Pydantic models for posture reports."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

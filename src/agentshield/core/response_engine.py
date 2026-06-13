@@ -51,7 +51,9 @@ def _mode_to_action(mode: ResponseMode) -> DecisionAction:
     }[mode]
 
 
-def _build_reason(action: DecisionAction, worst: Finding | None, all_findings: list[Finding]) -> str:
+def _build_reason(
+    action: DecisionAction, worst: Finding | None, all_findings: list[Finding]
+) -> str:
     count = len(all_findings)
     if action == DecisionAction.ALLOW:
         return f"{count} finding(s) — all suppressed by ignore policy"

@@ -2,6 +2,7 @@
 
 All network calls are mocked; this module does not require network access.
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -27,6 +28,7 @@ OSV_URL = "https://api.osv.dev/v1/query"
 
 # ── _max_severity helper ──────────────────────────────────────────────────────
 
+
 def _finding(severity: Severity) -> Finding:
     return Finding(rule_id="X", title="t", severity=severity, source="test")
 
@@ -46,11 +48,14 @@ def test_max_severity_multiple():
 
 # ── Denylist / allowlist short-circuits ──────────────────────────────────────
 
+
 def test_denylist_blocks_immediately(tmp_path):
-    cfg = Config.model_validate({
-        "denylist": ["evil-pkg"],
-        "cache": {"db_path": str(tmp_path / "cache.db")},
-    })
+    cfg = Config.model_validate(
+        {
+            "denylist": ["evil-pkg"],
+            "cache": {"db_path": str(tmp_path / "cache.db")},
+        }
+    )
     shield = AgentShield(config=cfg)
     result = shield.scan(ScanRequest(package="evil-pkg", ecosystem=Ecosystem.PYPI))
     assert result.decision.action == DecisionAction.BLOCK
@@ -59,10 +64,12 @@ def test_denylist_blocks_immediately(tmp_path):
 
 
 def test_allowlist_skips_scan_no_network(tmp_path):
-    cfg = Config.model_validate({
-        "allowlist": ["requests"],
-        "cache": {"db_path": str(tmp_path / "cache.db")},
-    })
+    cfg = Config.model_validate(
+        {
+            "allowlist": ["requests"],
+            "cache": {"db_path": str(tmp_path / "cache.db")},
+        }
+    )
     shield = AgentShield(config=cfg)
     # This must not make any network calls
     result = shield.scan(ScanRequest(package="requests", ecosystem=Ecosystem.PYPI))
@@ -72,16 +79,19 @@ def test_allowlist_skips_scan_no_network(tmp_path):
 
 
 def test_denylist_case_insensitive(tmp_path):
-    cfg = Config.model_validate({
-        "denylist": ["Evil-Pkg"],
-        "cache": {"db_path": str(tmp_path / "cache.db")},
-    })
+    cfg = Config.model_validate(
+        {
+            "denylist": ["Evil-Pkg"],
+            "cache": {"db_path": str(tmp_path / "cache.db")},
+        }
+    )
     shield = AgentShield(config=cfg)
     result = shield.scan(ScanRequest(package="evil-pkg", ecosystem=Ecosystem.PYPI))
     assert result.decision.action == DecisionAction.BLOCK
 
 
 # ── Cache hit path ───────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 @respx.mock
@@ -107,6 +117,7 @@ async def test_cache_hit_skips_network(tmp_path):
 
 # ── Full scan with mocked OSV ─────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_scan_no_findings_returns_allow(tmp_path):
@@ -116,9 +127,7 @@ async def test_scan_no_findings_returns_allow(tmp_path):
 
     # Suppress typosquatting by monkeypatching data
     with patch("agentshield.analyzers.typosquatting.TyposquattingChecker._load", return_value=[]):
-        result = await shield.ascan(
-            ScanRequest(package="clean-package", ecosystem=Ecosystem.PYPI)
-        )
+        result = await shield.ascan(ScanRequest(package="clean-package", ecosystem=Ecosystem.PYPI))
 
     assert result.decision.action in (DecisionAction.ALLOW, DecisionAction.LOG_ASYNC)
     assert result.cache_hit is False
@@ -128,17 +137,24 @@ async def test_scan_no_findings_returns_allow(tmp_path):
 @pytest.mark.asyncio
 @respx.mock
 async def test_scan_critical_vuln_returns_block(tmp_path):
-    respx.post(OSV_URL).mock(return_value=Response(200, json={
-        "vulns": [{
-            "id": "CVE-2024-CRITICAL",
-            "summary": "Critical RCE",
-            "details": "Remote code execution",
-            "severity": [],
-            "database_specific": {"severity": "CRITICAL"},
-            "references": [],
-            "affected": [],
-        }]
-    }))
+    respx.post(OSV_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "vulns": [
+                    {
+                        "id": "CVE-2024-CRITICAL",
+                        "summary": "Critical RCE",
+                        "details": "Remote code execution",
+                        "severity": [],
+                        "database_specific": {"severity": "CRITICAL"},
+                        "references": [],
+                        "affected": [],
+                    }
+                ]
+            },
+        )
+    )
     cfg = Config.model_validate({"cache": {"db_path": str(tmp_path / "cache.db")}})
     shield = AgentShield(config=cfg)
 
@@ -178,9 +194,7 @@ async def test_osv_failure_does_not_crash_scan(tmp_path):
     shield = AgentShield(config=cfg)
 
     with patch("agentshield.analyzers.typosquatting.TyposquattingChecker._load", return_value=[]):
-        result = await shield.ascan(
-            ScanRequest(package="pkg", ecosystem=Ecosystem.PYPI)
-        )
+        result = await shield.ascan(ScanRequest(package="pkg", ecosystem=Ecosystem.PYPI))
 
     # Scan should still return a result, even if OSV errored
     assert result is not None
@@ -189,27 +203,34 @@ async def test_osv_failure_does_not_crash_scan(tmp_path):
 @pytest.mark.asyncio
 @respx.mock
 async def test_scan_malicious_package_blocks(tmp_path):
-    respx.post(OSV_URL).mock(return_value=Response(200, json={
-        "vulns": [{
-            "id": "MAL-2024-1234",
-            "summary": "Malicious package",
-            "details": "Known malicious",
-            "severity": [],
-            "database_specific": {"type": "MALICIOUS", "severity": "CRITICAL"},
-            "references": [],
-            "affected": [],
-        }]
-    }))
-    cfg = Config.model_validate({
-        "rules": {"T1.1": {"mode": "block"}},
-        "cache": {"db_path": str(tmp_path / "cache.db")},
-    })
+    respx.post(OSV_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "vulns": [
+                    {
+                        "id": "MAL-2024-1234",
+                        "summary": "Malicious package",
+                        "details": "Known malicious",
+                        "severity": [],
+                        "database_specific": {"type": "MALICIOUS", "severity": "CRITICAL"},
+                        "references": [],
+                        "affected": [],
+                    }
+                ]
+            },
+        )
+    )
+    cfg = Config.model_validate(
+        {
+            "rules": {"T1.1": {"mode": "block"}},
+            "cache": {"db_path": str(tmp_path / "cache.db")},
+        }
+    )
     shield = AgentShield(config=cfg)
 
     with patch("agentshield.analyzers.typosquatting.TyposquattingChecker._load", return_value=[]):
-        result = await shield.ascan(
-            ScanRequest(package="colouredlogs", ecosystem=Ecosystem.PYPI)
-        )
+        result = await shield.ascan(ScanRequest(package="colouredlogs", ecosystem=Ecosystem.PYPI))
 
     assert result.decision.action == DecisionAction.BLOCK
     t1_findings = [f for f in result.findings if f.rule_id == "T1.1"]
@@ -218,13 +239,16 @@ async def test_scan_malicious_package_blocks(tmp_path):
 
 # ── Synchronous scan wrapper ──────────────────────────────────────────────────
 
+
 @respx.mock
 def test_sync_scan_works(tmp_path):
     respx.post(OSV_URL).mock(return_value=Response(200, json={"vulns": []}))
-    cfg = Config.model_validate({
-        "allowlist": ["requests"],
-        "cache": {"db_path": str(tmp_path / "cache.db")},
-    })
+    cfg = Config.model_validate(
+        {
+            "allowlist": ["requests"],
+            "cache": {"db_path": str(tmp_path / "cache.db")},
+        }
+    )
     shield = AgentShield(config=cfg)
     result = shield.scan(ScanRequest(package="requests", ecosystem=Ecosystem.PYPI))
     assert result.decision.action == DecisionAction.ALLOW

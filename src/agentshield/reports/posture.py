@@ -9,6 +9,7 @@ Design notes:
   tool names to override.
 - Sensitive env var detection uses pattern matching only — values are never read.
 """
+
 from __future__ import annotations
 
 import json
@@ -148,7 +149,9 @@ async def _package_summary_from_local_db(
         )
 
     max_sev = max((f.severity for f in findings), default=Severity.NONE)
-    return PackageSummary(name=name, version=version, ecosystem="pypi", findings=findings, max_severity=max_sev)
+    return PackageSummary(
+        name=name, version=version, ecosystem="pypi", findings=findings, max_severity=max_sev
+    )
 
 
 async def _load_async_log(db_path: Path, since_hours: int = 24) -> list[AsyncLogEntry]:
@@ -235,10 +238,7 @@ async def run_posture_check(
     # Async report log
     async_log_entries = await _load_async_log(db_path, since_hours=async_log_hours)
     async_log_medium_plus = sum(
-        1
-        for entry in async_log_entries
-        for f in entry.findings
-        if f.severity >= Severity.MEDIUM
+        1 for entry in async_log_entries for f in entry.findings if f.severity >= Severity.MEDIUM
     )
 
     return PostureReport(

@@ -1,4 +1,5 @@
 """Unit tests for the malicious package database module."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,6 +19,7 @@ def _make_request(
 
 
 # ── curated list loading ─────────────────────────────────────────────────────────
+
 
 def test_load_curated_returns_dict():
     data = _load_curated()
@@ -39,6 +41,7 @@ def test_load_curated_has_pypi_entries():
 
 
 # ── MaliciousDB.check — curated list path ──────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_check_known_malicious_curated():
@@ -86,6 +89,7 @@ async def test_check_wrong_ecosystem_no_match():
 
 
 # ── MaliciousDB.check — SQLite path ─────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_check_sqlite_malicious(tmp_path: Path):
@@ -135,6 +139,7 @@ async def test_check_sqlite_none_db_path_skips():
 
 
 # ── ScanCache malicious_packages table ───────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_cache_add_and_is_malicious(tmp_path: Path):
@@ -194,6 +199,7 @@ async def test_cache_add_malicious_ignore_duplicates(tmp_path: Path):
 
 
 # ── CVE mirror table ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_cache_upsert_and_query_cve(tmp_path: Path):

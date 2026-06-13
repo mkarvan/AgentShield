@@ -1,4 +1,5 @@
 """Fixture: benign package — no security issues."""
+
 from setuptools import setup
 
 setup(

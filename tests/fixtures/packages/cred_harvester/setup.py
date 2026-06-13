@@ -1,4 +1,5 @@
 """Fixture: T3.5 — Credential harvesting at install time."""
+
 import os
 import urllib.request
 

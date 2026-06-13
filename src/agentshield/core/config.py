@@ -99,7 +99,9 @@ class Config(BaseModel):
                 data[field] = val.get("packages", [])
         # Support AGENTSHIELD_OFFLINE env var overriding the config file
         if not data.get("offline") and os.environ.get("AGENTSHIELD_OFFLINE", "").lower() in (
-            "1", "true", "yes"
+            "1",
+            "true",
+            "yes",
         ):
             data["offline"] = True
         return data

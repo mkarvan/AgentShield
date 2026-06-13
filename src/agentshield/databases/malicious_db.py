@@ -10,6 +10,7 @@ Use MaliciousDB.check() during a scan to get a T1.1 Finding if the package
 is known-malicious.  Use MaliciousDB.warm() (called by `cache warm`) to
 populate the SQLite table from the OSV bulk API.
 """
+
 from __future__ import annotations
 
 import json
@@ -70,8 +71,7 @@ class MaliciousDB:
                     rule_id="T1.1",
                     title=f"Known-malicious package: {request.package}",
                     description=(
-                        f"'{request.package}' is on the AgentShield curated malicious "
-                        "package list."
+                        f"'{request.package}' is on the AgentShield curated malicious package list."
                     ),
                     severity=Severity.CRITICAL,
                     source="malicious_db_curated",
@@ -89,7 +89,8 @@ class MaliciousDB:
                     Finding(
                         rule_id="T1.1",
                         title=f"Known-malicious package: {request.package}",
-                        description=row.get("reason") or (
+                        description=row.get("reason")
+                        or (
                             f"'{request.package}' was flagged as malicious by "
                             f"{row.get('source', 'unknown source')}."
                         ),
@@ -129,20 +130,22 @@ class MaliciousDB:
                 if rows:
                     inserted = await cache.add_malicious_packages_bulk(rows)
                     total += inserted
-                    logger.info(
-                        "Warmed %d malicious packages for %s", inserted, ecosystem.value
-                    )
+                    logger.info("Warmed %d malicious packages for %s", inserted, ecosystem.value)
                 if progress_callback is not None:
                     callback = progress_callback  # type: ignore[assignment]
                     if callable(callback):
                         callback(ecosystem.value, len(rows))
             except Exception as exc:
-                logger.warning("Failed to fetch malicious packages for %s: %s", ecosystem.value, exc)
+                logger.warning(
+                    "Failed to fetch malicious packages for %s: %s", ecosystem.value, exc
+                )
 
         return total
 
 
-async def _fetch_malicious_from_osv(ecosystem: str) -> list[tuple[str, str, str | None, str | None]]:
+async def _fetch_malicious_from_osv(
+    ecosystem: str,
+) -> list[tuple[str, str, str | None, str | None]]:
     """Query OSV for known-malicious advisories in a given ecosystem.
 
     OSV doesn't have a dedicated malicious endpoint; we query using a broad
@@ -156,9 +159,14 @@ async def _fetch_malicious_from_osv(ecosystem: str) -> list[tuple[str, str, str 
     rows: list[tuple[str, str, str | None, str | None]] = []
 
     curated = _load_curated()
-    eco_key = next((k for k, v in {
-        "PyPI": "pypi", "npm": "npm", "crates.io": "cargo"
-    }.items() if k == ecosystem), None)
+    eco_key = next(
+        (
+            k
+            for k, v in {"PyPI": "pypi", "npm": "npm", "crates.io": "cargo"}.items()
+            if k == ecosystem
+        ),
+        None,
+    )
     if eco_key is None:
         return rows
 
@@ -170,21 +178,22 @@ async def _fetch_malicious_from_osv(ecosystem: str) -> list[tuple[str, str, str 
     async with httpx.AsyncClient(timeout=30.0) as client:
         for pkg in packages_to_check:
             try:
-                payload = {
-                    "package": {"name": pkg, "ecosystem": ecosystem}
-                }
+                payload = {"package": {"name": pkg, "ecosystem": ecosystem}}
                 resp = await client.post(OSV_QUERY_URL, json=payload)
                 if resp.status_code != 200:
                     continue
                 data = resp.json()
                 vulns = data.get("vulns", [])
                 is_malicious = any(
-                    v.get("database_specific", {}).get("type") == "MALICIOUS"
-                    for v in vulns
+                    v.get("database_specific", {}).get("type") == "MALICIOUS" for v in vulns
                 )
                 reason = None
                 if is_malicious:
-                    v = next(v for v in vulns if v.get("database_specific", {}).get("type") == "MALICIOUS")
+                    v = next(
+                        v
+                        for v in vulns
+                        if v.get("database_specific", {}).get("type") == "MALICIOUS"
+                    )
                     reason = v.get("summary")
 
                 rows.append((pkg, eco_key, reason, "osv_malicious+curated"))

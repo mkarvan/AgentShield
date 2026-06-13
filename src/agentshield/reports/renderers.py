@@ -1,4 +1,5 @@
 """Report renderers — convert a PostureReport to various output formats."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -111,9 +112,14 @@ def render_markdown(report: PostureReport) -> str:
             f"{len(report.async_log_entries)} package(s) installed without real-time check.",
         ]
         if report.async_log_medium_plus_count:
-            lines += [f"⚠ {report.async_log_medium_plus_count} with MEDIUM+ findings — review recommended."]
+            lines += [
+                f"⚠ {report.async_log_medium_plus_count} with MEDIUM+ findings — review recommended."
+            ]
         lines += [""]
-        lines += ["| Package | Ecosystem | Severity | Logged |", "|---------|-----------|----------|--------|"]
+        lines += [
+            "| Package | Ecosystem | Severity | Logged |",
+            "|---------|-----------|----------|--------|",
+        ]
         for entry in report.async_log_entries:
             sevs = ", ".join(f.severity.value for f in entry.findings) if entry.findings else "—"
             logged = entry.logged_at.strftime("%Y-%m-%d %H:%M")
@@ -156,7 +162,9 @@ def render_terminal(report: PostureReport) -> None:
     header.append("Risk Score: ", style="bold")
     header.append(f"{report.risk_score}/100 — {report.risk_label}", style=label_color)
     header.append(f"  |  Generated: {ts}", style="dim")
-    console.print(Panel(header, title="[bold]AgentShield Posture Report[/bold]", border_style="blue"))
+    console.print(
+        Panel(header, title="[bold]AgentShield Posture Report[/bold]", border_style="blue")
+    )
 
     # Summary counts
     summary = Table.grid(padding=(0, 4))
@@ -237,10 +245,14 @@ def render_terminal(report: PostureReport) -> None:
         tbl.add_column("Findings")
         tbl.add_column("Logged", style="dim")
         for entry in report.async_log_entries:
-            sevs = " ".join(
-                f"[{_SEV_COLOR.get(f.severity.value, 'white')}]{f.severity.value}[/]"
-                for f in entry.findings
-            ) if entry.findings else "[dim]none[/dim]"
+            sevs = (
+                " ".join(
+                    f"[{_SEV_COLOR.get(f.severity.value, 'white')}]{f.severity.value}[/]"
+                    for f in entry.findings
+                )
+                if entry.findings
+                else "[dim]none[/dim]"
+            )
             tbl.add_row(
                 entry.package,
                 entry.ecosystem,

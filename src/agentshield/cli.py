@@ -25,10 +25,14 @@ console = Console()
 
 @app.command()
 def scan(
-    package: str = typer.Argument(..., help="Package name (optionally with ==version, e.g. requests==2.28.0)"),
+    package: str = typer.Argument(
+        ..., help="Package name (optionally with ==version, e.g. requests==2.28.0)"
+    ),
     ecosystem: Ecosystem = typer.Option(Ecosystem.PYPI, "--ecosystem", "-e", help="pypi|npm|cargo"),
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
-    deep: bool = typer.Option(False, "--deep", help="Run static analysis in addition to CVE lookups"),
+    deep: bool = typer.Option(
+        False, "--deep", help="Run static analysis in addition to CVE lookups"
+    ),
     offline: bool = typer.Option(False, "--offline", help="Use only local DB — no network calls"),
 ) -> None:
     """Scan a package for security vulnerabilities."""
@@ -58,7 +62,9 @@ def scan(
         raise typer.Exit(code=1)
 
 
-async def _scan_with_progress(shield: AgentShield, request: ScanRequest, *, deep: bool) -> ScanResult:
+async def _scan_with_progress(
+    shield: AgentShield, request: ScanRequest, *, deep: bool
+) -> ScanResult:
     """Run the scan and show a Rich spinner if it exceeds 2 seconds."""
     _SPINNER_DELAY = 2.0
     _description = (
@@ -100,7 +106,9 @@ def posture(
         "-t",
         help="Comma-separated list of agent tool names to classify (e.g. bash,read_file,web_search)",
     ),
-    async_log_hours: int = typer.Option(24, "--log-hours", help="Hours of async report log to include"),
+    async_log_hours: int = typer.Option(
+        24, "--log-hours", help="Hours of async report log to include"
+    ),
     skip_packages: bool = typer.Option(
         False, "--skip-packages", help="Skip installed-package CVE scan (faster)"
     ),
@@ -262,7 +270,9 @@ async def _cmd_warm(cfg: object, ecosystems_str: str) -> None:
             elif phase == "parsing":
                 progress.update(overall, description=f"[cyan]Parsing {ecosystem}...")
             elif phase == "done":
-                progress.update(overall, advance=1, description=f"[green]{ecosystem} done ({count} advisories)")
+                progress.update(
+                    overall, advance=1, description=f"[green]{ecosystem} done ({count} advisories)"
+                )
 
         t0 = time.monotonic()
         stats = await warm_cache(
@@ -308,6 +318,7 @@ def serve(
         import sys
 
         from agentshield.server.mcp import MCPServer
+
         server = MCPServer(shield)
         console.print("[dim]AgentShield MCP server starting on stdio...[/dim]", file=sys.stderr)
         with contextlib.suppress(KeyboardInterrupt):
@@ -333,7 +344,9 @@ def _print_result(result: ScanResult, wall_ms: int | None = None) -> None:
         DecisionAction.BLOCK: "red",
     }.get(action, "white")
 
-    duration_display = f"{wall_ms}ms (wall)" if wall_ms is not None else f"{result.scan_duration_ms}ms"
+    duration_display = (
+        f"{wall_ms}ms (wall)" if wall_ms is not None else f"{result.scan_duration_ms}ms"
+    )
     console.print(f"\n[bold {color}]{action.value}[/bold {color}] — {result.decision.reason}")
     console.print(
         f"  Cache hit: {result.cache_hit}  |  Duration: {duration_display}"

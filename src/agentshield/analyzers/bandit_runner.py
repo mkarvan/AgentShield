@@ -3,6 +3,7 @@
 Runs bandit against Python source in an extracted package directory, focusing on
 security-relevant tests. Gracefully degrades if bandit is not installed.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -107,8 +108,10 @@ async def run_bandit(package_dir: Path, request: ScanRequest) -> list[Finding]:
     cmd = [
         bandit_bin,
         "-r",
-        "--format", "json",
-        "--tests", tests_arg,
+        "--format",
+        "json",
+        "--tests",
+        tests_arg,
         "--exit-zero",
         str(package_dir),
     ]
@@ -166,19 +169,21 @@ def _parse_bandit_output(data: dict) -> list[Finding]:
             continue
         seen.add(rule_id)
 
-        findings.append(Finding(
-            rule_id=rule_id,
-            title=test_name.replace("_", " ").title(),
-            description=issue_text,
-            severity=severity,
-            source="bandit",
-            references=[],
-            remediation=None,
-            metadata={
-                "bandit_test_id": test_id,
-                "file": filename,
-                "line": line,
-            },
-        ))
+        findings.append(
+            Finding(
+                rule_id=rule_id,
+                title=test_name.replace("_", " ").title(),
+                description=issue_text,
+                severity=severity,
+                source="bandit",
+                references=[],
+                remediation=None,
+                metadata={
+                    "bandit_test_id": test_id,
+                    "file": filename,
+                    "line": line,
+                },
+            )
+        )
 
     return findings

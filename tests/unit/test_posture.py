@@ -1,4 +1,5 @@
 """Tests for posture report generation, renderers, and async log."""
+
 from __future__ import annotations
 
 import json
@@ -21,6 +22,7 @@ from agentshield.reports.scoring import risk_label, risk_score
 
 # ------------------------------------------------------------------ helpers
 
+
 def _make_finding(rule_id: str, severity: Severity, title: str = "Test finding") -> Finding:
     return Finding(rule_id=rule_id, title=title, severity=severity, source="test")
 
@@ -41,7 +43,9 @@ def _make_report(
         + [_make_finding(f"L{i}", Severity.LOW) for i in range(low)]
     )
     ps = PackageSummary(name="test-pkg", version="1.0", ecosystem="pypi", findings=findings_flat)
-    score = risk_score(critical, high, medium, low, sum(1 for t in (tools or []) if t.risk_level == "high"))
+    score = risk_score(
+        critical, high, medium, low, sum(1 for t in (tools or []) if t.risk_level == "high")
+    )
     return PostureReport(
         generated_at=datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC),
         risk_score=score,
@@ -61,6 +65,7 @@ def _make_report(
 
 
 # ------------------------------------------------------------------ tool classification
+
 
 class TestToolClassification:
     def test_bash_is_high(self) -> None:
@@ -87,6 +92,7 @@ class TestToolClassification:
 
 # ------------------------------------------------------------------ render_json
 
+
 class TestRenderJson:
     def test_valid_json(self) -> None:
         report = _make_report(critical=1, high=2)
@@ -104,6 +110,7 @@ class TestRenderJson:
 
 
 # ------------------------------------------------------------------ render_markdown
+
 
 class TestRenderMarkdown:
     def test_contains_heading(self) -> None:
@@ -155,6 +162,7 @@ class TestRenderMarkdown:
 
 # ------------------------------------------------------------------ render_html
 
+
 class TestRenderHtml:
     def test_produces_html(self) -> None:
         report = _make_report(critical=1)
@@ -174,6 +182,7 @@ class TestRenderHtml:
 
 
 # ------------------------------------------------------------------ async report log (cache)
+
 
 class TestAsyncReportLog:
     @pytest.fixture
@@ -226,6 +235,7 @@ class TestAsyncReportLog:
 
 # ------------------------------------------------------------------ run_posture_check
 
+
 class TestRunPostureCheck:
     @pytest.mark.asyncio
     async def test_empty_environment(self, tmp_path: Path) -> None:
@@ -259,7 +269,9 @@ class TestRunPostureCheck:
         cache = ScanCache(CacheConfig(db_path=db_path))
         findings = [_make_finding("T2.2", Severity.HIGH)]
         await cache.append_async_log(
-            "risky-pkg", "1.0", "pypi",
+            "risky-pkg",
+            "1.0",
+            "pypi",
             json.dumps([f.model_dump() for f in findings]),
             "LOG_ASYNC due to T2.2",
         )

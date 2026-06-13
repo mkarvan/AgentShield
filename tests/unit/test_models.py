@@ -1,4 +1,5 @@
 """Unit tests for core Pydantic models."""
+
 import pytest
 from pydantic import ValidationError
 
@@ -13,6 +14,7 @@ from agentshield.core.models import (
 )
 
 # ── Severity ordering ────────────────────────────────────────────────────────
+
 
 def test_severity_order():
     assert Severity.NONE < Severity.INFO < Severity.LOW
@@ -57,6 +59,7 @@ def test_severity_hashable():
 
 
 # ── Finding validation ────────────────────────────────────────────────────────
+
 
 def _finding(**overrides) -> Finding:
     defaults = dict(
@@ -106,6 +109,7 @@ def test_finding_filters_empty_references():
 
 # ── ScanRequest validation ────────────────────────────────────────────────────
 
+
 def test_scan_request_basic():
     req = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI)
     assert req.package == "requests"
@@ -139,6 +143,7 @@ def test_scan_request_space_in_package_fails():
 
 
 # ── ScanResult validation ─────────────────────────────────────────────────────
+
 
 def _result(**overrides) -> ScanResult:
     defaults = dict(

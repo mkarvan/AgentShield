@@ -5,6 +5,7 @@ AgentShieldSkill can be imported and tested without the real framework.
 When ``openclaw`` *is* installed the skill imports from it directly
 (see skill.py) and these shims are ignored.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -118,18 +118,18 @@ def _cvss3_base_score(vector: str) -> float | None:
         c_v, i_v, a_v = cia[parts["C"]], cia[parts["I"]], cia[parts["A"]]
 
         iss = 1.0 - (1.0 - c_v) * (1.0 - i_v) * (1.0 - a_v)
-        impact = (
-            7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
-            if scope_changed
-            else 6.42 * iss
-        )
+        impact = 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15 if scope_changed else 6.42 * iss
 
         exploitability = 8.22 * av * ac * pr * ui
 
         if impact <= 0:
             return 0.0
 
-        raw = min(impact + exploitability, 10.0) if not scope_changed else min(1.08 * (impact + exploitability), 10.0)
+        raw = (
+            min(impact + exploitability, 10.0)
+            if not scope_changed
+            else min(1.08 * (impact + exploitability), 10.0)
+        )
         return math.ceil(raw * 10) / 10  # roundup to 1 decimal place
     except Exception:
         return None

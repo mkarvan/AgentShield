@@ -9,6 +9,7 @@ Usage in ``hermes_config.yaml``::
       - module: agentshield.integrations.hermes
         class: AgentShieldPlugin
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -59,9 +60,7 @@ class AgentShieldPlugin(ToolPlugin):
         result = await self.shield.ascan(request)
 
         if result.decision.action == DecisionAction.BLOCK:
-            return ToolResult.error(
-                f"AgentShield blocked {call.name}: {result.decision.reason}"
-            )
+            return ToolResult.error(f"AgentShield blocked {call.name}: {result.decision.reason}")
 
         if result.decision.action == DecisionAction.NEEDS_CONFIRMATION:
             return ToolResult.needs_confirmation(

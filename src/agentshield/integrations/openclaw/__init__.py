@@ -12,6 +12,7 @@ Register in your OpenClaw config::
           - action_type: npm_install
           - action_type: cargo_add
 """
+
 from agentshield.integrations.openclaw.skill import AgentShieldSkill
 
 __all__ = ["AgentShieldSkill"]

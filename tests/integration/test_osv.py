@@ -3,6 +3,7 @@
 Run with: pytest tests/integration/ -m integration
 Skip in CI without network: pytest -m "not integration"
 """
+
 import pytest
 
 from agentshield.core.models import Ecosystem, ScanRequest, Severity

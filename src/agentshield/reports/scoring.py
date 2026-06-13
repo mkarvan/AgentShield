@@ -3,6 +3,7 @@
 Uses a tanh-based saturation formula so each severity band contributes
 diminishing returns as the count grows (see PLAN.md §11.3).
 """
+
 from __future__ import annotations
 
 from math import tanh

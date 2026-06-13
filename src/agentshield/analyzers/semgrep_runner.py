@@ -3,6 +3,7 @@
 Runs semgrep CLI against an extracted package directory using AgentShield's
 custom YAML rules (T3.1–T3.5). Gracefully degrades if semgrep is not installed.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,7 +56,8 @@ async def run_semgrep(package_dir: Path, request: ScanRequest) -> list[Finding]:
     cmd = [
         semgrep_bin,
         "scan",
-        "--config", str(_RULES_DIR),
+        "--config",
+        str(_RULES_DIR),
         "--json",
         "--no-rewrite-rule-ids",
         "--quiet",
@@ -130,20 +132,22 @@ def _parse_semgrep_output(data: dict, request: ScanRequest) -> list[Finding]:
         }
         title = _RULE_TITLES.get(rule_id, message[:120])
 
-        findings.append(Finding(
-            rule_id=rule_id,
-            title=title,
-            description=message,
-            severity=severity,
-            source="semgrep",
-            references=[],
-            remediation=None,
-            metadata={
-                "check_id": check_id,
-                "file": path,
-                "line": start_line,
-                "category": meta.get("category", ""),
-            },
-        ))
+        findings.append(
+            Finding(
+                rule_id=rule_id,
+                title=title,
+                description=message,
+                severity=severity,
+                source="semgrep",
+                references=[],
+                remediation=None,
+                metadata={
+                    "check_id": check_id,
+                    "file": path,
+                    "line": start_line,
+                    "category": meta.get("category", ""),
+                },
+            )
+        )
 
     return findings

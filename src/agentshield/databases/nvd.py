@@ -9,6 +9,7 @@ environment variable to get the higher limit.
 
 Reference: https://nvd.nist.gov/developers/vulnerabilities
 """
+
 from __future__ import annotations
 
 import asyncio

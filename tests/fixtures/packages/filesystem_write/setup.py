@@ -1,4 +1,5 @@
 """Fixture: T3.3 — Filesystem write outside package dir at install time."""
+
 import os
 
 from setuptools import setup

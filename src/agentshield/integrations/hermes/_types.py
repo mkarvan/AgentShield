@@ -5,6 +5,7 @@ AgentShieldPlugin can be imported and tested without the real framework.
 When ``hermes-agent`` *is* installed the plugin imports from it directly
 (see plugin.py) and these shims are ignored.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

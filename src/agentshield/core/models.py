@@ -3,6 +3,7 @@
 All data flowing through the scan pipeline is represented by these types.
 They are the contract between the integration layers, core engine, and CLI.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

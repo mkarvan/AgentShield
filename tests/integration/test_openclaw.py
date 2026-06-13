@@ -3,6 +3,7 @@
 These tests exercise the full skill → scanner → response-engine pipeline
 using mocked enrichment calls (no real network access).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -96,7 +97,9 @@ async def test_log_async_is_treated_as_allowed(tmp_path):
         source="osv",
     )
 
-    with patch.object(skill.shield, "ascan", new=AsyncMock(return_value=_log_async_result(req, finding))):
+    with patch.object(
+        skill.shield, "ascan", new=AsyncMock(return_value=_log_async_result(req, finding))
+    ):
         result = await skill.execute(ctx)
 
     # LOG_ASYNC → allowed=True (install proceeds; finding logged for posture report)
@@ -119,7 +122,9 @@ async def test_blocked_package_not_allowed(tmp_path):
         source="malicious_db",
     )
 
-    with patch.object(skill.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))):
+    with patch.object(
+        skill.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))
+    ):
         result = await skill.execute(ctx)
 
     assert result.allowed is False

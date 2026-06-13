@@ -11,6 +11,7 @@ Without a token, this client is silently skipped (scan returns []).
 
 Reference: https://docs.github.com/en/graphql/reference/objects#securityvulnerability
 """
+
 from __future__ import annotations
 
 import logging
@@ -106,11 +107,7 @@ class GitHubAdvisoryClient:
         if "errors" in data:
             raise ValueError(f"GraphQL errors: {data['errors']}")
 
-        nodes = (
-            data.get("data", {})
-            .get("securityVulnerabilities", {})
-            .get("nodes", [])
-        )
+        nodes = data.get("data", {}).get("securityVulnerabilities", {}).get("nodes", [])
 
         findings: list[Finding] = []
         for node in nodes:

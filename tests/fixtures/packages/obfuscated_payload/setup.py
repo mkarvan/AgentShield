@@ -1,4 +1,5 @@
 """Fixture: T3.4 — Obfuscated payload at install time."""
+
 import base64
 
 from setuptools import setup

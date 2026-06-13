@@ -1,4 +1,5 @@
 """Unit tests for the SQLite scan cache."""
+
 import time
 
 import pytest
@@ -35,6 +36,7 @@ def _make_result(request: ScanRequest, severity: Severity = Severity.NONE) -> Sc
 
 
 # ── Basic get/set ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_cache_miss_returns_none(tmp_path):
@@ -80,6 +82,7 @@ async def test_cache_key_includes_ecosystem(tmp_path):
 
 # ── TTL behaviour ─────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_expired_entry_returns_none(tmp_path, monkeypatch):
     cache = _make_cache(tmp_path)
@@ -105,6 +108,7 @@ async def test_ttl_varies_by_severity(tmp_path):
 
 
 # ── Maintenance operations ────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_clear_removes_all_entries(tmp_path):

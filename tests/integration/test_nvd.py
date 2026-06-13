@@ -7,6 +7,7 @@ default and only run when marked explicitly:
 
 Tip: set NVD_API_KEY to avoid rate-limiting during repeated test runs.
 """
+
 from __future__ import annotations
 
 import os

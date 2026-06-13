@@ -4,6 +4,7 @@ In offline mode the scanner must not make any network calls — it queries
 only the local SQLite tables (cve_mirror, malicious_packages) and the
 in-process typosquatting checker.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,13 +24,16 @@ from agentshield.core.scanner import AgentShield, _dedupe_findings, _query_cve_m
 
 
 def _cfg(tmp_path: Path, offline: bool = True) -> Config:
-    return Config.model_validate({
-        "offline": offline,
-        "cache": {"db_path": str(tmp_path / "test.db")},
-    })
+    return Config.model_validate(
+        {
+            "offline": offline,
+            "cache": {"db_path": str(tmp_path / "test.db")},
+        }
+    )
 
 
 # ── _dedupe_findings ─────────────────────────────────────────────────────────────
+
 
 def test_dedupe_keeps_highest_severity():
     from agentshield.core.models import Finding
@@ -62,6 +66,7 @@ def test_dedupe_empty():
 
 
 # ── _query_cve_mirror ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_query_cve_mirror_returns_findings(tmp_path: Path):
@@ -97,6 +102,7 @@ async def test_query_cve_mirror_empty(tmp_path: Path):
 
 
 # ── Offline scan full flow ─────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 @respx.mock  # Ensures no network calls slip through
@@ -197,6 +203,7 @@ async def test_offline_scan_is_fast(tmp_path: Path):
 
 
 # ── Online → Offline config switch ─────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 @respx.mock

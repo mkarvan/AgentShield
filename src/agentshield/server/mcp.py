@@ -8,6 +8,7 @@ Exposed tools:
 - ``agentshield_scan``    — scan a package before installation
 - ``agentshield_posture`` — generate a security posture report (Phase 4)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -112,11 +113,14 @@ class MCPServer:
         params: dict[str, Any] = msg.get("params") or {}
 
         if method == "initialize":
-            return _ok(msg_id, {
-                "protocolVersion": _PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
-                "serverInfo": _SERVER_INFO,
-            })
+            return _ok(
+                msg_id,
+                {
+                    "protocolVersion": _PROTOCOL_VERSION,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": _SERVER_INFO,
+                },
+            )
 
         if method == "initialized":
             return None  # notification — no response

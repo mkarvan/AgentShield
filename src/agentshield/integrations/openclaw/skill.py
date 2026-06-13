@@ -13,6 +13,7 @@ Usage in ``openclaw_config.yaml``::
           - action_type: npm_install
           - action_type: cargo_add
 """
+
 from __future__ import annotations
 
 from pathlib import Path

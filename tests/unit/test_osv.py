@@ -1,4 +1,5 @@
 """Unit tests for the OSV client — all HTTP calls are mocked via respx."""
+
 from __future__ import annotations
 
 import pytest
@@ -17,6 +18,7 @@ def _req(package: str = "requests", version: str | None = "2.28.0") -> ScanReque
 
 # ── CVSS v3 base score calculator ────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "vector,expected_min,expected_max",
     [
@@ -33,7 +35,9 @@ def _req(package: str = "requests", version: str | None = "2.28.0") -> ScanReque
 def test_cvss3_base_score(vector: str, expected_min: float, expected_max: float):
     score = _cvss3_base_score(vector)
     assert score is not None
-    assert expected_min <= score <= expected_max, f"Expected [{expected_min}, {expected_max}], got {score}"
+    assert expected_min <= score <= expected_max, (
+        f"Expected [{expected_min}, {expected_max}], got {score}"
+    )
 
 
 def test_cvss3_invalid_vector_returns_none():
@@ -43,6 +47,7 @@ def test_cvss3_invalid_vector_returns_none():
 
 
 # ── _extract_severity ─────────────────────────────────────────────────────────
+
 
 def test_extract_severity_from_database_specific():
     vuln = {"database_specific": {"severity": "HIGH"}, "severity": []}
@@ -76,6 +81,7 @@ def test_extract_severity_default_is_medium():
 
 # ── OSVClient (mocked HTTP) ───────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_no_vulns_returns_empty():
@@ -88,17 +94,31 @@ async def test_no_vulns_returns_empty():
 @pytest.mark.asyncio
 @respx.mock
 async def test_single_vuln_parsed():
-    respx.post(OSV_URL).mock(return_value=Response(200, json={
-        "vulns": [{
-            "id": "GHSA-1234-5678-9abc",
-            "summary": "Test vulnerability",
-            "details": "Some details",
-            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
-            "database_specific": {"severity": "CRITICAL"},
-            "references": [{"url": "https://example.com/advisory"}],
-            "affected": [{"ranges": [{"events": [{"introduced": "0"}, {"fixed": "2.30.0"}]}]}],
-        }]
-    }))
+    respx.post(OSV_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "vulns": [
+                    {
+                        "id": "GHSA-1234-5678-9abc",
+                        "summary": "Test vulnerability",
+                        "details": "Some details",
+                        "severity": [
+                            {
+                                "type": "CVSS_V3",
+                                "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                            }
+                        ],
+                        "database_specific": {"severity": "CRITICAL"},
+                        "references": [{"url": "https://example.com/advisory"}],
+                        "affected": [
+                            {"ranges": [{"events": [{"introduced": "0"}, {"fixed": "2.30.0"}]}]}
+                        ],
+                    }
+                ]
+            },
+        )
+    )
     client = OSVClient()
     findings = await client.scan(_req())
     assert len(findings) == 1
@@ -113,17 +133,24 @@ async def test_single_vuln_parsed():
 @pytest.mark.asyncio
 @respx.mock
 async def test_malicious_package_classified_as_t1_1():
-    respx.post(OSV_URL).mock(return_value=Response(200, json={
-        "vulns": [{
-            "id": "MAL-2024-1234",
-            "summary": "Malicious package",
-            "details": "",
-            "severity": [],
-            "database_specific": {"type": "MALICIOUS", "severity": "CRITICAL"},
-            "references": [],
-            "affected": [],
-        }]
-    }))
+    respx.post(OSV_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "vulns": [
+                    {
+                        "id": "MAL-2024-1234",
+                        "summary": "Malicious package",
+                        "details": "",
+                        "severity": [],
+                        "database_specific": {"type": "MALICIOUS", "severity": "CRITICAL"},
+                        "references": [],
+                        "affected": [],
+                    }
+                ]
+            },
+        )
+    )
     client = OSVClient()
     findings = await client.scan(_req(package="colouredlogs"))
     assert len(findings) == 1
@@ -143,12 +170,31 @@ async def test_http_error_propagates():
 @pytest.mark.asyncio
 @respx.mock
 async def test_multiple_vulns_all_returned():
-    respx.post(OSV_URL).mock(return_value=Response(200, json={
-        "vulns": [
-            {"id": "CVE-A", "summary": "A", "severity": [], "database_specific": {"severity": "HIGH"}, "references": [], "affected": []},
-            {"id": "CVE-B", "summary": "B", "severity": [], "database_specific": {"severity": "MEDIUM"}, "references": [], "affected": []},
-        ]
-    }))
+    respx.post(OSV_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "vulns": [
+                    {
+                        "id": "CVE-A",
+                        "summary": "A",
+                        "severity": [],
+                        "database_specific": {"severity": "HIGH"},
+                        "references": [],
+                        "affected": [],
+                    },
+                    {
+                        "id": "CVE-B",
+                        "summary": "B",
+                        "severity": [],
+                        "database_specific": {"severity": "MEDIUM"},
+                        "references": [],
+                        "affected": [],
+                    },
+                ]
+            },
+        )
+    )
     client = OSVClient()
     findings = await client.scan(_req())
     assert len(findings) == 2

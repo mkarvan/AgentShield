@@ -6,6 +6,7 @@ rather than agent-generated reasoning.
 
 Severity: MEDIUM, default response: warn_confirm.
 """
+
 from __future__ import annotations
 
 import re

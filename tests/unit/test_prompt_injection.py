@@ -1,4 +1,5 @@
 """Unit tests for the T4.1 prompt-injection heuristic."""
+
 from __future__ import annotations
 
 from agentshield.analyzers.prompt_injection import check_prompt_injection
@@ -147,7 +148,7 @@ def test_multiple_patterns_in_hint_returns_single_finding():
 
 
 def test_finding_fields_are_populated():
-    findings = check_prompt_injection(_req("evil", '`pip install evil`'))
+    findings = check_prompt_injection(_req("evil", "`pip install evil`"))
     assert len(findings) == 1
     f = findings[0]
     assert f.rule_id == "T4.1"

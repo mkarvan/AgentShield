@@ -3,6 +3,7 @@
 Runs 'cargo audit --json' against a package directory containing a Cargo.lock.
 Gracefully degrades when cargo is not installed or no Cargo.lock is present.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -104,6 +105,7 @@ def _parse_cargo_audit(data: dict, request: ScanRequest) -> list[Finding]:
         cvss_score: float | None = None
         if cvss_str:
             import contextlib
+
             with contextlib.suppress(ValueError, AttributeError):
                 cvss_score = float(cvss_str.split("/")[-1]) if "/" in cvss_str else float(cvss_str)
 
@@ -116,20 +118,22 @@ def _parse_cargo_audit(data: dict, request: ScanRequest) -> list[Finding]:
         patched: list[str] = advisory.get("patched_versions", [])
         remediation = f"Upgrade to {patched[0]}" if patched else None
 
-        findings.append(Finding(
-            rule_id=vuln_id,
-            title=f"{vuln_id}: {title}",
-            description=description,
-            severity=severity,
-            source="cargo_audit",
-            references=[url] if url else [],
-            cvss_score=cvss_score,
-            remediation=remediation,
-            metadata={
-                "package": pkg_name,
-                "version": pkg_version,
-                "aliases": advisory.get("aliases", []),
-            },
-        ))
+        findings.append(
+            Finding(
+                rule_id=vuln_id,
+                title=f"{vuln_id}: {title}",
+                description=description,
+                severity=severity,
+                source="cargo_audit",
+                references=[url] if url else [],
+                cvss_score=cvss_score,
+                remediation=remediation,
+                metadata={
+                    "package": pkg_name,
+                    "version": pkg_version,
+                    "aliases": advisory.get("aliases", []),
+                },
+            )
+        )
 
     return findings

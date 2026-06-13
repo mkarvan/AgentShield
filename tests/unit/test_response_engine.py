@@ -44,9 +44,11 @@ def test_high_finding_warns_by_default():
 
 
 def test_rule_override_trumps_default():
-    config = Config.model_validate({
-        "rules": {"T1.2": {"mode": "block"}},
-    })
+    config = Config.model_validate(
+        {
+            "rules": {"T1.2": {"mode": "block"}},
+        }
+    )
     engine = ResponseEngine(config)
     findings = [_finding("T1.2", Severity.HIGH)]
     decision = engine.decide(findings, _request())
@@ -98,8 +100,8 @@ def test_log_async_beats_allow():
     """A mix of IGNORE and ASYNC_REPORT findings → LOG_ASYNC, not ALLOW."""
     engine = ResponseEngine(Config())
     findings = [
-        _finding("LOW-IGNORED", Severity.LOW),    # default: ignore → ALLOW
-        _finding("MED-ASYNC", Severity.MEDIUM),   # default: async_report → LOG_ASYNC
+        _finding("LOW-IGNORED", Severity.LOW),  # default: ignore → ALLOW
+        _finding("MED-ASYNC", Severity.MEDIUM),  # default: async_report → LOG_ASYNC
     ]
     decision = engine.decide(findings, _request())
     assert decision.action == DecisionAction.LOG_ASYNC
@@ -109,8 +111,8 @@ def test_block_beats_log_async():
     """BLOCK still wins when mixed with LOG_ASYNC."""
     engine = ResponseEngine(Config())
     findings = [
-        _finding("MED-ASYNC", Severity.MEDIUM),   # LOG_ASYNC
-        _finding("CRIT", Severity.CRITICAL),       # BLOCK
+        _finding("MED-ASYNC", Severity.MEDIUM),  # LOG_ASYNC
+        _finding("CRIT", Severity.CRITICAL),  # BLOCK
     ]
     decision = engine.decide(findings, _request())
     assert decision.action == DecisionAction.BLOCK
@@ -125,9 +127,11 @@ def test_reason_contains_finding_info():
 
 
 def test_ecosystem_override_affects_decision():
-    config = Config.model_validate({
-        "ecosystems": {"pypi": {"high": "block"}},
-    })
+    config = Config.model_validate(
+        {
+            "ecosystems": {"pypi": {"high": "block"}},
+        }
+    )
     engine = ResponseEngine(config)
     req = ScanRequest(package="test-pkg", ecosystem=Ecosystem.PYPI)
     findings = [_finding("RULE", Severity.HIGH)]
@@ -138,15 +142,17 @@ def test_ecosystem_override_affects_decision():
 def test_all_ignored_findings_returns_allow_with_reason():
     """When every finding is set to IGNORE, decide() returns ALLOW with the
     'suppressed' reason string (exercises the _build_reason ALLOW branch)."""
-    config = Config.model_validate({
-        "defaults": {
-            "critical": "ignore",
-            "high": "ignore",
-            "medium": "ignore",
-            "low": "ignore",
-            "info": "ignore",
+    config = Config.model_validate(
+        {
+            "defaults": {
+                "critical": "ignore",
+                "high": "ignore",
+                "medium": "ignore",
+                "low": "ignore",
+                "info": "ignore",
+            }
         }
-    })
+    )
     engine = ResponseEngine(config)
     findings = [
         _finding("CVE-LOW", Severity.LOW),

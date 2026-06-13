@@ -1,4 +1,5 @@
 """Unit tests for the GitHub Advisory Database GraphQL client."""
+
 from __future__ import annotations
 
 import pytest
@@ -37,7 +38,12 @@ def _make_node(
             "severity": severity,
             "identifiers": identifiers,
             "references": [{"url": "https://example.com/ghsa"}],
-            "cvss": {"score": cvss_score, "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"} if cvss_score else None,
+            "cvss": {
+                "score": cvss_score,
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            }
+            if cvss_score
+            else None,
             "publishedAt": "2024-01-01T00:00:00Z",
             "withdrawnAt": "2024-06-01T00:00:00Z" if withdrawn else None,
         },
@@ -51,6 +57,7 @@ def _make_request(package: str = "requests", ecosystem: Ecosystem = Ecosystem.PY
 
 
 # ── _node_to_finding ─────────────────────────────────────────────────────────────
+
 
 def test_node_to_finding_basic():
     node = _make_node()
@@ -122,6 +129,7 @@ def test_node_to_finding_skips_missing_ghsa():
 
 # ── GitHubAdvisoryClient.scan ─────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_scan_no_token_returns_empty():
     client = GitHubAdvisoryClient(token=None)
@@ -141,13 +149,11 @@ async def test_scan_unsupported_ecosystem_returns_empty():
 @pytest.mark.asyncio
 @respx.mock
 async def test_scan_returns_findings():
-    respx.post(GH_URL).mock(return_value=Response(200, json={
-        "data": {
-            "securityVulnerabilities": {
-                "nodes": [_make_node()]
-            }
-        }
-    }))
+    respx.post(GH_URL).mock(
+        return_value=Response(
+            200, json={"data": {"securityVulnerabilities": {"nodes": [_make_node()]}}}
+        )
+    )
     client = GitHubAdvisoryClient(token="ghp_test")
     findings = await client.scan(_make_request())
     assert len(findings) == 1
@@ -157,9 +163,9 @@ async def test_scan_returns_findings():
 @pytest.mark.asyncio
 @respx.mock
 async def test_scan_empty_nodes():
-    respx.post(GH_URL).mock(return_value=Response(200, json={
-        "data": {"securityVulnerabilities": {"nodes": []}}
-    }))
+    respx.post(GH_URL).mock(
+        return_value=Response(200, json={"data": {"securityVulnerabilities": {"nodes": []}}})
+    )
     client = GitHubAdvisoryClient(token="ghp_test")
     findings = await client.scan(_make_request())
     assert findings == []
@@ -168,16 +174,21 @@ async def test_scan_empty_nodes():
 @pytest.mark.asyncio
 @respx.mock
 async def test_scan_filters_withdrawn():
-    respx.post(GH_URL).mock(return_value=Response(200, json={
-        "data": {
-            "securityVulnerabilities": {
-                "nodes": [
-                    _make_node(withdrawn=True),
-                    _make_node(ghsa_id="GHSA-yyyy-yyyy-yyyy", withdrawn=False),
-                ]
-            }
-        }
-    }))
+    respx.post(GH_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "securityVulnerabilities": {
+                        "nodes": [
+                            _make_node(withdrawn=True),
+                            _make_node(ghsa_id="GHSA-yyyy-yyyy-yyyy", withdrawn=False),
+                        ]
+                    }
+                }
+            },
+        )
+    )
     client = GitHubAdvisoryClient(token="ghp_test")
     findings = await client.scan(_make_request())
     assert len(findings) == 1
@@ -186,9 +197,9 @@ async def test_scan_filters_withdrawn():
 @pytest.mark.asyncio
 @respx.mock
 async def test_scan_graphql_error_returns_empty():
-    respx.post(GH_URL).mock(return_value=Response(200, json={
-        "errors": [{"message": "Some GraphQL error"}]
-    }))
+    respx.post(GH_URL).mock(
+        return_value=Response(200, json={"errors": [{"message": "Some GraphQL error"}]})
+    )
     client = GitHubAdvisoryClient(token="ghp_test")
     findings = await client.scan(_make_request())
     assert findings == []
@@ -221,13 +232,14 @@ async def test_scan_sends_auth_header():
 @pytest.mark.asyncio
 @respx.mock
 async def test_scan_npm_ecosystem():
-    respx.post(GH_URL).mock(return_value=Response(200, json={
-        "data": {
-            "securityVulnerabilities": {
-                "nodes": [_make_node(severity="CRITICAL")]
-            }
-        }
-    }))
+    respx.post(GH_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {"securityVulnerabilities": {"nodes": [_make_node(severity="CRITICAL")]}}
+            },
+        )
+    )
     client = GitHubAdvisoryClient(token="ghp_test")
     req = ScanRequest(package="lodash", ecosystem=Ecosystem.NPM)
     findings = await client.scan(req)

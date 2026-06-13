@@ -8,6 +8,7 @@ Register in your Hermes config::
       - module: agentshield.integrations.hermes
         class: AgentShieldPlugin
 """
+
 from agentshield.integrations.hermes.plugin import AgentShieldPlugin
 
 __all__ = ["AgentShieldPlugin"]

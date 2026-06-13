@@ -1,4 +1,5 @@
 """Unit tests for config loading and priority resolution."""
+
 import textwrap
 from pathlib import Path
 
@@ -6,6 +7,7 @@ from agentshield.core.config import Config, SeverityPolicy
 from agentshield.core.models import Ecosystem, ResponseMode, Severity
 
 # ── Default config ─────────────────────────────────────────────────────────────
+
 
 def test_default_config_has_sane_defaults():
     cfg = Config()
@@ -23,6 +25,7 @@ def test_empty_allowlist_denylist():
 
 
 # ── TOML loading ───────────────────────────────────────────────────────────────
+
 
 def test_load_missing_path_returns_default(tmp_path: Path):
     cfg = Config.load(tmp_path / "nonexistent.toml")
@@ -103,6 +106,7 @@ def test_cache_db_path_expansion(tmp_path: Path):
 
 # ── Priority resolution ───────────────────────────────────────────────────────
 
+
 def test_global_default_used_when_no_override():
     cfg = Config()
     mode = cfg.response_mode_for("SOME-RULE", Severity.MEDIUM)
@@ -110,19 +114,23 @@ def test_global_default_used_when_no_override():
 
 
 def test_rule_override_takes_highest_priority():
-    cfg = Config.model_validate({
-        "rules": {"T1.2": {"mode": "block"}},
-        "defaults": {"high": "warn_confirm"},
-    })
+    cfg = Config.model_validate(
+        {
+            "rules": {"T1.2": {"mode": "block"}},
+            "defaults": {"high": "warn_confirm"},
+        }
+    )
     mode = cfg.response_mode_for("T1.2", Severity.HIGH)
     assert mode == ResponseMode.BLOCK
 
 
 def test_ecosystem_override_between_rule_and_default():
-    cfg = Config.model_validate({
-        "ecosystems": {"pypi": {"high": "block"}},
-        "defaults": {"high": "warn_confirm"},
-    })
+    cfg = Config.model_validate(
+        {
+            "ecosystems": {"pypi": {"high": "block"}},
+            "defaults": {"high": "warn_confirm"},
+        }
+    )
     # With ecosystem override
     mode = cfg.response_mode_for("SOME-RULE", Severity.HIGH, Ecosystem.PYPI)
     assert mode == ResponseMode.BLOCK
@@ -133,10 +141,12 @@ def test_ecosystem_override_between_rule_and_default():
 
 
 def test_rule_overrides_ecosystem():
-    cfg = Config.model_validate({
-        "rules": {"T1.1": {"mode": "block"}},
-        "ecosystems": {"pypi": {"critical": "warn_confirm"}},
-    })
+    cfg = Config.model_validate(
+        {
+            "rules": {"T1.1": {"mode": "block"}},
+            "ecosystems": {"pypi": {"critical": "warn_confirm"}},
+        }
+    )
     # Rule takes priority over ecosystem
     mode = cfg.response_mode_for("T1.1", Severity.CRITICAL, Ecosystem.PYPI)
     assert mode == ResponseMode.BLOCK

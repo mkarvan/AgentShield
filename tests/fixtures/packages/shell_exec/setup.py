@@ -1,4 +1,5 @@
 """Fixture: T3.1 — Shell execution at install time."""
+
 import subprocess
 
 from setuptools import setup

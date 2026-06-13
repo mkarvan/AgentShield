@@ -8,6 +8,7 @@ GitHub token (any personal access token with no special scopes works).
 Without a token, the client returns [] gracefully — that behaviour is also
 tested here to verify the no-token path doesn't crash.
 """
+
 from __future__ import annotations
 
 import os

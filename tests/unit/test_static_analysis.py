@@ -2,6 +2,7 @@
 
 All tests operate on local fixture packages — no network calls.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -103,7 +104,9 @@ def test_network_severity_is_high():
 def test_findings_source_is_setup_py_inspector():
     findings = inspect_package_directory(FIXTURES / "shell_exec", _req())
     for f in findings:
-        assert f.source == "setup_py_inspector", f"Expected source 'setup_py_inspector', got {f.source!r}"
+        assert f.source == "setup_py_inspector", (
+            f"Expected source 'setup_py_inspector', got {f.source!r}"
+        )
 
 
 # ── Missing / empty directory ─────────────────────────────────────────────────
@@ -122,10 +125,14 @@ def test_directory_with_no_setup_py(tmp_path: Path):
 
 # ── bandit_runner: availability check ────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_bandit_runner_returns_list_when_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+async def test_bandit_runner_returns_list_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     """bandit_runner should return [] gracefully when bandit is not on PATH."""
     import agentshield.analyzers.bandit_runner as br
+
     monkeypatch.setattr(br, "_bandit_available", lambda: None)
     result = await br.run_bandit(tmp_path, _req())
     assert result == []
@@ -139,21 +146,23 @@ async def test_bandit_runner_returns_list_on_shell_exec(tmp_path: Path):
     if _bandit_available() is None:
         pytest.skip("bandit not installed")
 
-    (tmp_path / "setup.py").write_text(
-        "import subprocess\nsubprocess.run(['id'])\n"
-    )
+    (tmp_path / "setup.py").write_text("import subprocess\nsubprocess.run(['id'])\n")
     findings = await run_bandit(tmp_path, _req())
     # bandit B404 (import_subprocess) or B603 (subprocess_without_shell_equals_true)
-    assert any(
-        "T3.1" in f.rule_id or "bandit:" in f.rule_id for f in findings
-    ), f"Expected subprocess finding, got: {findings}"
+    assert any("T3.1" in f.rule_id or "bandit:" in f.rule_id for f in findings), (
+        f"Expected subprocess finding, got: {findings}"
+    )
 
 
 # ── semgrep_runner: graceful degradation ─────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_semgrep_runner_returns_empty_when_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+async def test_semgrep_runner_returns_empty_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     import agentshield.analyzers.semgrep_runner as sr
+
     monkeypatch.setattr(sr, "_semgrep_available", lambda: None)
     result = await sr.run_semgrep(tmp_path, _req())
     assert result == []
@@ -161,9 +170,13 @@ async def test_semgrep_runner_returns_empty_when_unavailable(monkeypatch: pytest
 
 # ── npm_audit_runner: graceful degradation ───────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_npm_audit_runner_returns_empty_when_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+async def test_npm_audit_runner_returns_empty_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     import agentshield.analyzers.npm_audit_runner as na
+
     monkeypatch.setattr(na, "_npm_available", lambda: None)
     result = await na.run_npm_audit(tmp_path, _req())
     assert result == []
@@ -182,9 +195,13 @@ async def test_npm_audit_runner_skips_without_lockfile(tmp_path: Path):
 
 # ── cargo_audit_runner: graceful degradation ─────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_cargo_audit_runner_returns_empty_when_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+async def test_cargo_audit_runner_returns_empty_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     import agentshield.analyzers.cargo_audit_runner as ca
+
     monkeypatch.setattr(ca, "_cargo_audit_available", lambda: None)
     result = await ca.run_cargo_audit(tmp_path, _req())
     assert result == []
@@ -203,6 +220,7 @@ async def test_cargo_audit_runner_skips_without_lockfile(tmp_path: Path):
 
 # ── Scanner integration: --deep flag wiring ───────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_deep_flag_false_skips_static_analysis(tmp_path: Path):
     """Without --deep, _run_deep_checks should never be called."""
@@ -212,9 +230,11 @@ async def test_deep_flag_false_skips_static_analysis(tmp_path: Path):
     from agentshield.core.models import Ecosystem, ScanRequest
     from agentshield.core.scanner import AgentShield
 
-    cfg = Config.model_validate({
-        "cache": {"db_path": str(tmp_path / "cache.db")},
-    })
+    cfg = Config.model_validate(
+        {
+            "cache": {"db_path": str(tmp_path / "cache.db")},
+        }
+    )
     shield = AgentShield(config=cfg)
 
     with (
@@ -234,16 +254,18 @@ async def test_deep_flag_true_invokes_static_analysis(tmp_path: Path):
     from agentshield.core.models import Ecosystem, ScanRequest
     from agentshield.core.scanner import AgentShield
 
-    cfg = Config.model_validate({
-        "cache": {"db_path": str(tmp_path / "cache.db")},
-    })
+    cfg = Config.model_validate(
+        {
+            "cache": {"db_path": str(tmp_path / "cache.db")},
+        }
+    )
     shield = AgentShield(config=cfg)
 
     with (
         patch.object(shield, "_run_checks", new_callable=AsyncMock, return_value=[]),
-        patch.object(shield, "_run_deep_checks", new_callable=AsyncMock, return_value=[]) as mock_deep,
+        patch.object(
+            shield, "_run_deep_checks", new_callable=AsyncMock, return_value=[]
+        ) as mock_deep,
     ):
-        await shield.ascan(
-            ScanRequest(package="some-pkg", ecosystem=Ecosystem.PYPI, deep=True)
-        )
+        await shield.ascan(ScanRequest(package="some-pkg", ecosystem=Ecosystem.PYPI, deep=True))
         mock_deep.assert_called_once()

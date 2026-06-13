@@ -4,6 +4,7 @@ Tests the full JSON-RPC message lifecycle: initialize → tools/list → tools/c
 The MCPServer.handle_message() method is called directly (no subprocess / real
 stdio) to keep tests fast and deterministic.
 """
+
 from __future__ import annotations
 
 import json
@@ -69,12 +70,14 @@ def _block_result(request: ScanRequest) -> ScanResult:
 @pytest.mark.asyncio
 async def test_initialize_returns_server_info(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {"protocolVersion": "2024-11-05", "clientInfo": {"name": "test"}},
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "clientInfo": {"name": "test"}},
+        }
+    )
 
     assert response is not None
     assert response["jsonrpc"] == "2.0"
@@ -87,10 +90,12 @@ async def test_initialize_returns_server_info(tmp_path):
 @pytest.mark.asyncio
 async def test_initialized_notification_returns_none(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "method": "initialized",
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "method": "initialized",
+        }
+    )
     assert response is None
 
 
@@ -100,12 +105,14 @@ async def test_initialized_notification_returns_none(tmp_path):
 @pytest.mark.asyncio
 async def test_tools_list_returns_expected_tools(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {},
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {},
+        }
+    )
 
     assert response is not None
     tools = response["result"]["tools"]
@@ -117,9 +124,9 @@ async def test_tools_list_returns_expected_tools(tmp_path):
 @pytest.mark.asyncio
 async def test_scan_tool_has_required_input_schema(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}
-    })
+    response = await server.handle_message(
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}
+    )
     tools = {t["name"]: t for t in response["result"]["tools"]}
     scan_tool = tools["agentshield_scan"]
     required = scan_tool["inputSchema"]["required"]
@@ -136,15 +143,17 @@ async def test_scan_clean_package_returns_allow(tmp_path):
     req = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI)
 
     with patch.object(server.shield, "ascan", new=AsyncMock(return_value=_clean_result(req))):
-        response = await server.handle_message({
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tools/call",
-            "params": {
-                "name": "agentshield_scan",
-                "arguments": {"package": "requests", "ecosystem": "pypi"},
-            },
-        })
+        response = await server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "agentshield_scan",
+                    "arguments": {"package": "requests", "ecosystem": "pypi"},
+                },
+            }
+        )
 
     assert response is not None
     content = response["result"]["content"][0]["text"]
@@ -159,15 +168,17 @@ async def test_scan_blocked_package_returns_block_decision(tmp_path):
     req = ScanRequest(package="evil-pkg", ecosystem=Ecosystem.PYPI)
 
     with patch.object(server.shield, "ascan", new=AsyncMock(return_value=_block_result(req))):
-        response = await server.handle_message({
-            "jsonrpc": "2.0",
-            "id": 5,
-            "method": "tools/call",
-            "params": {
-                "name": "agentshield_scan",
-                "arguments": {"package": "evil-pkg", "ecosystem": "pypi"},
-            },
-        })
+        response = await server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "agentshield_scan",
+                    "arguments": {"package": "evil-pkg", "ecosystem": "pypi"},
+                },
+            }
+        )
 
     content = response["result"]["content"][0]["text"]
     payload = json.loads(content)
@@ -182,15 +193,17 @@ async def test_mcp_scan_denylist_no_network(tmp_path):
     """Denylisted packages are blocked without any network calls."""
     server = _make_server(tmp_path, {"denylist": ["colouredlogs"]})
 
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 6,
-        "method": "tools/call",
-        "params": {
-            "name": "agentshield_scan",
-            "arguments": {"package": "colouredlogs", "ecosystem": "pypi"},
-        },
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "agentshield_scan",
+                "arguments": {"package": "colouredlogs", "ecosystem": "pypi"},
+            },
+        }
+    )
 
     content = response["result"]["content"][0]["text"]
     payload = json.loads(content)
@@ -200,15 +213,17 @@ async def test_mcp_scan_denylist_no_network(tmp_path):
 @pytest.mark.asyncio
 async def test_scan_missing_package_returns_error(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 7,
-        "method": "tools/call",
-        "params": {
-            "name": "agentshield_scan",
-            "arguments": {"ecosystem": "pypi"},   # package is missing
-        },
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "agentshield_scan",
+                "arguments": {"ecosystem": "pypi"},  # package is missing
+            },
+        }
+    )
 
     assert response is not None
     result = response["result"]
@@ -218,15 +233,17 @@ async def test_scan_missing_package_returns_error(tmp_path):
 @pytest.mark.asyncio
 async def test_scan_unknown_ecosystem_returns_error(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 8,
-        "method": "tools/call",
-        "params": {
-            "name": "agentshield_scan",
-            "arguments": {"package": "some-pkg", "ecosystem": "maven"},
-        },
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {
+                "name": "agentshield_scan",
+                "arguments": {"package": "some-pkg", "ecosystem": "maven"},
+            },
+        }
+    )
 
     result = response["result"]
     assert result.get("isError") is True
@@ -243,19 +260,21 @@ async def test_scan_context_hint_forwarded(tmp_path):
         return _clean_result(r)
 
     with patch.object(server.shield, "ascan", new=_mock_scan):
-        await server.handle_message({
-            "jsonrpc": "2.0",
-            "id": 9,
-            "method": "tools/call",
-            "params": {
-                "name": "agentshield_scan",
-                "arguments": {
-                    "package": "flask",
-                    "ecosystem": "pypi",
-                    "context_hint": "Building a web API",
+        await server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {
+                    "name": "agentshield_scan",
+                    "arguments": {
+                        "package": "flask",
+                        "ecosystem": "pypi",
+                        "context_hint": "Building a web API",
+                    },
                 },
-            },
-        })
+            }
+        )
 
     assert captured[0].context_hint == "Building a web API"
     assert captured[0].source == "mcp"
@@ -267,12 +286,14 @@ async def test_scan_context_hint_forwarded(tmp_path):
 @pytest.mark.asyncio
 async def test_posture_tool_returns_not_implemented_message(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 10,
-        "method": "tools/call",
-        "params": {"name": "agentshield_posture", "arguments": {}},
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {"name": "agentshield_posture", "arguments": {}},
+        }
+    )
 
     content = response["result"]["content"][0]["text"]
     assert "Phase 4" in content or "not yet" in content.lower()
@@ -284,12 +305,14 @@ async def test_posture_tool_returns_not_implemented_message(tmp_path):
 @pytest.mark.asyncio
 async def test_unknown_method_returns_error(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 11,
-        "method": "nonexistent/method",
-        "params": {},
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "nonexistent/method",
+            "params": {},
+        }
+    )
 
     assert response is not None
     assert "error" in response
@@ -299,12 +322,14 @@ async def test_unknown_method_returns_error(tmp_path):
 @pytest.mark.asyncio
 async def test_unknown_tool_returns_is_error(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 12,
-        "method": "tools/call",
-        "params": {"name": "nonexistent_tool", "arguments": {}},
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {"name": "nonexistent_tool", "arguments": {}},
+        }
+    )
 
     result = response["result"]
     assert result.get("isError") is True
@@ -314,10 +339,12 @@ async def test_unknown_tool_returns_is_error(tmp_path):
 async def test_notification_without_id_returns_none(tmp_path):
     server = _make_server(tmp_path)
     # Notification: no id, unknown method
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "method": "some/notification",
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "method": "some/notification",
+        }
+    )
     assert response is None
 
 
@@ -327,11 +354,13 @@ async def test_notification_without_id_returns_none(tmp_path):
 @pytest.mark.asyncio
 async def test_ping_returns_empty_result(tmp_path):
     server = _make_server(tmp_path)
-    response = await server.handle_message({
-        "jsonrpc": "2.0",
-        "id": 13,
-        "method": "ping",
-        "params": {},
-    })
+    response = await server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "ping",
+            "params": {},
+        }
+    )
     assert response is not None
     assert response["result"] == {}

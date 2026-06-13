@@ -3,6 +3,7 @@
 The extracted directory is returned as a context manager; the caller is
 responsible for cleanup (tempfile.TemporaryDirectory handles it automatically).
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,9 +50,7 @@ async def _resolve_pypi_url(package: str, version: str | None) -> str:
 
     candidates = wheels or sdists
     if not candidates:
-        raise WheelExtractionError(
-            f"No downloadable artifacts found for {package}=={version}"
-        )
+        raise WheelExtractionError(f"No downloadable artifacts found for {package}=={version}")
 
     return candidates[0]["url"]
 

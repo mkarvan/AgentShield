@@ -1,4 +1,5 @@
 """Tests for the tanh-based risk scoring formula (PLAN.md §11.3)."""
+
 from __future__ import annotations
 
 import pytest

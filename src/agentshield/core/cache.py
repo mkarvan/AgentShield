@@ -10,12 +10,12 @@ from agentshield.core.config import CacheConfig
 from agentshield.core.models import ScanRequest, ScanResult
 
 _TTL_BY_SEVERITY: dict[str, int] = {
-    "NONE": 7 * 24 * 3600,    # clean scan — 7 days
-    "INFO": 24 * 3600,         # 24 h
-    "LOW": 12 * 3600,          # 12 h
-    "MEDIUM": 6 * 3600,        # 6 h
-    "HIGH": 6 * 3600,          # 6 h
-    "CRITICAL": 3 * 3600,      # 3 h — re-check critical packages often
+    "NONE": 7 * 24 * 3600,  # clean scan — 7 days
+    "INFO": 24 * 3600,  # 24 h
+    "LOW": 12 * 3600,  # 12 h
+    "MEDIUM": 6 * 3600,  # 6 h
+    "HIGH": 6 * 3600,  # 6 h
+    "CRITICAL": 3 * 3600,  # 3 h — re-check critical packages often
 }
 
 _DDL = """
@@ -182,7 +182,16 @@ class ScanCache:
             await db.execute(
                 """INSERT OR REPLACE INTO cve_mirror
                    VALUES (?,?,?,?,?,?,?,?)""",
-                (cve_id, package, ecosystem, affected_versions, severity, cvss_score, description, now),
+                (
+                    cve_id,
+                    package,
+                    ecosystem,
+                    affected_versions,
+                    severity,
+                    cvss_score,
+                    description,
+                    now,
+                ),
             )
             await db.commit()
 
@@ -231,7 +240,9 @@ class ScanCache:
             )
             await db.commit()
 
-    async def add_malicious_packages_bulk(self, rows: list[tuple[str, str, str | None, str | None]]) -> int:
+    async def add_malicious_packages_bulk(
+        self, rows: list[tuple[str, str, str | None, str | None]]
+    ) -> int:
         """Bulk-insert (package, ecosystem, reason, source) tuples. Returns inserted count."""
         now = int(time.time())
         records = [(p.lower(), e.lower(), r, s, now) for p, e, r, s in rows]

@@ -1,4 +1,5 @@
 """Unit tests for the NVD API v2 client."""
+
 from __future__ import annotations
 
 import time
@@ -49,6 +50,7 @@ def _make_request(package: str = "requests", version: str | None = None) -> Scan
 
 # ── Rate limiter ────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_rate_limiter_allows_under_limit():
     limiter = NVDRateLimiter(limit=5, window=30)
@@ -78,6 +80,7 @@ async def test_rate_limiter_blocks_over_limit():
 
 
 # ── _cve_to_finding ─────────────────────────────────────────────────────────────
+
 
 def test_cve_to_finding_returns_finding():
     cve = _make_cve(description="requests library has a remote code execution flaw")
@@ -116,12 +119,9 @@ def test_cve_to_finding_includes_references():
 
 # ── _extract_metrics ────────────────────────────────────────────────────────────
 
+
 def test_extract_metrics_v31():
-    cve = {
-        "metrics": {
-            "cvssMetricV31": [{"cvssData": {"baseScore": 7.5, "baseSeverity": "HIGH"}}]
-        }
-    }
+    cve = {"metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.5, "baseSeverity": "HIGH"}}]}}
     sev, score = _extract_metrics(cve)
     assert sev == Severity.HIGH
     assert score == 7.5
@@ -129,9 +129,7 @@ def test_extract_metrics_v31():
 
 def test_extract_metrics_v30_fallback():
     cve = {
-        "metrics": {
-            "cvssMetricV30": [{"cvssData": {"baseScore": 5.0, "baseSeverity": "MEDIUM"}}]
-        }
+        "metrics": {"cvssMetricV30": [{"cvssData": {"baseScore": 5.0, "baseSeverity": "MEDIUM"}}]}
     }
     sev, score = _extract_metrics(cve)
     assert sev == Severity.MEDIUM
@@ -139,11 +137,7 @@ def test_extract_metrics_v30_fallback():
 
 
 def test_extract_metrics_v2_fallback():
-    cve = {
-        "metrics": {
-            "cvssMetricV2": [{"cvssData": {"baseScore": 3.5, "baseSeverity": "LOW"}}]
-        }
-    }
+    cve = {"metrics": {"cvssMetricV2": [{"cvssData": {"baseScore": 3.5, "baseSeverity": "LOW"}}]}}
     sev, score = _extract_metrics(cve)
     assert sev == Severity.LOW
     assert score == 3.5
@@ -169,19 +163,25 @@ def test_extract_metrics_empty():
 
 # ── NVDClient.scan (mocked) ──────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_nvd_scan_returns_findings():
-    respx.get(_NVD_URL).mock(return_value=Response(200, json={
-        "vulnerabilities": [
-            _make_cve(
-                cve_id="CVE-2024-99999",
-                description="requests package RCE vulnerability",
-                base_score=9.8,
-                severity="CRITICAL",
-            )
-        ]
-    }))
+    respx.get(_NVD_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "vulnerabilities": [
+                    _make_cve(
+                        cve_id="CVE-2024-99999",
+                        description="requests package RCE vulnerability",
+                        base_score=9.8,
+                        severity="CRITICAL",
+                    )
+                ]
+            },
+        )
+    )
     client = NVDClient()
     req = _make_request("requests")
     findings = await client.scan(req)
@@ -202,11 +202,16 @@ async def test_nvd_scan_empty_results():
 @pytest.mark.asyncio
 @respx.mock
 async def test_nvd_scan_filters_unrelated():
-    respx.get(_NVD_URL).mock(return_value=Response(200, json={
-        "vulnerabilities": [
-            _make_cve(description="A vulnerability in apache httpd webserver component")
-        ]
-    }))
+    respx.get(_NVD_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "vulnerabilities": [
+                    _make_cve(description="A vulnerability in apache httpd webserver component")
+                ]
+            },
+        )
+    )
     client = NVDClient()
     findings = await client.scan(_make_request("requests"))
     assert findings == []

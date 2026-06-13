@@ -17,6 +17,7 @@ Response::
 
 Start with ``agentshield serve`` (default socket: ``~/.agentshield/agentshield.sock``).
 """
+
 from __future__ import annotations
 
 import asyncio

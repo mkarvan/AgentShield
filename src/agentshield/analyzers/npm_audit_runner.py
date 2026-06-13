@@ -3,6 +3,7 @@
 Runs 'npm audit --json' against a package directory containing a package-lock.json
 or node_modules. Gracefully degrades when npm is not installed.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -108,21 +109,27 @@ def _parse_npm_audit(data: dict, request: ScanRequest) -> list[Finding]:
         elif fix_info is True:
             remediation = "Run 'npm audit fix'"
 
-        findings.append(Finding(
-            rule_id=rule_id,
-            title=title,
-            description=vuln_info.get("url") or title,
-            severity=severity,
-            source="npm_audit",
-            references=list({
-                item.get("url", "") for item in via if isinstance(item, dict) and item.get("url")
-            }),
-            remediation=remediation,
-            metadata={
-                "package": pkg_name,
-                "cves": cve_ids,
-                "via": [v for v in via if isinstance(v, str)],
-            },
-        ))
+        findings.append(
+            Finding(
+                rule_id=rule_id,
+                title=title,
+                description=vuln_info.get("url") or title,
+                severity=severity,
+                source="npm_audit",
+                references=list(
+                    {
+                        item.get("url", "")
+                        for item in via
+                        if isinstance(item, dict) and item.get("url")
+                    }
+                ),
+                remediation=remediation,
+                metadata={
+                    "package": pkg_name,
+                    "cves": cve_ids,
+                    "via": [v for v in via if isinstance(v, str)],
+                },
+            )
+        )
 
     return findings

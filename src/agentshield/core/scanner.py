@@ -75,6 +75,13 @@ class AgentShield:
         else:
             findings = await self._run_checks(request)
 
+        # T4.1 heuristic: detect prompt-injected install requests (local, no I/O)
+        from agentshield.analyzers.prompt_injection import check_prompt_injection
+
+        t4_findings = check_prompt_injection(request)
+        if t4_findings:
+            findings = _dedupe_findings(findings + t4_findings)
+
         # Static analysis (--deep only) — runs after enrichment checks regardless of offline mode
         if request.deep:
             deep_findings = await self._run_deep_checks(request)

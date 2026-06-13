@@ -69,8 +69,11 @@ class AgentShield:
         if cached is not None:
             return cached
 
-        # Run enrichment + typosquatting in parallel
-        findings = await self._run_checks(request)
+        # Run checks (online or offline depending on config)
+        if self.config.offline:
+            findings = await self._run_offline_checks(request)
+        else:
+            findings = await self._run_checks(request)
 
         max_sev = _max_severity(findings)
         decision = self.response_engine.decide(findings, request)
@@ -87,24 +90,102 @@ class AgentShield:
         return result
 
     async def _run_checks(self, request: ScanRequest) -> list[Finding]:
+        """Full online enrichment: OSV + NVD + GitHub Advisory + typosquatting + malicious DB."""
         from agentshield.analyzers.typosquatting import TyposquattingChecker
+        from agentshield.databases.github_advisory import GitHubAdvisoryClient
+        from agentshield.databases.malicious_db import MaliciousDB
+        from agentshield.databases.nvd import NVDClient
         from agentshield.databases.osv import OSVClient
 
         tasks = [
             OSVClient().scan(request),
+            NVDClient(api_key=self.config.api.nvd_api_key).scan(request),
+            GitHubAdvisoryClient(token=self.config.api.github_token).scan(request),
             TyposquattingChecker().scan(request),
+            MaliciousDB().check(request, db_path=self.config.cache.db_path),
         ]
+        source_names = ["osv", "nvd", "github_advisory", "typosquatting", "malicious_db"]
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         findings: list[Finding] = []
-        for i, r in enumerate(results):
+        for source, r in zip(source_names, results):
             if isinstance(r, list):
                 findings.extend(r)
             elif isinstance(r, Exception):
-                source = ["osv", "typosquatting"][i]
                 logger.warning("Check '%s' failed for %s: %s", source, request.package, r)
 
-        return findings
+        # Deduplicate findings by rule_id (keep highest severity)
+        return _dedupe_findings(findings)
+
+    async def _run_offline_checks(self, request: ScanRequest) -> list[Finding]:
+        """Offline enrichment: local SQLite only — no network calls."""
+        from agentshield.analyzers.typosquatting import TyposquattingChecker
+        from agentshield.databases.malicious_db import MaliciousDB
+
+        tasks: list = [
+            TyposquattingChecker().scan(request),
+            MaliciousDB().check(request, db_path=self.config.cache.db_path),
+            _query_cve_mirror(request, self.config.cache.db_path),
+        ]
+        source_names = ["typosquatting", "malicious_db", "cve_mirror"]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        findings: list[Finding] = []
+        for source, r in zip(source_names, results):
+            if isinstance(r, list):
+                findings.extend(r)
+            elif isinstance(r, Exception):
+                logger.warning("Offline check '%s' failed for %s: %s", source, request.package, r)
+
+        return _dedupe_findings(findings)
+
+
+async def _query_cve_mirror(request: ScanRequest, db_path: Path) -> list[Finding]:
+    """Query the local cve_mirror table for offline CVE lookups."""
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import CacheConfig
+    from agentshield.core.models import Severity
+
+    _SEV_MAP = {
+        "CRITICAL": Severity.CRITICAL,
+        "HIGH": Severity.HIGH,
+        "MEDIUM": Severity.MEDIUM,
+        "LOW": Severity.LOW,
+        "INFO": Severity.INFO,
+    }
+
+    cache = ScanCache(CacheConfig(db_path=db_path))
+    rows = await cache.query_cve_mirror(request.package, request.ecosystem.value)
+
+    findings: list[Finding] = []
+    for row in rows:
+        sev = _SEV_MAP.get(row.get("severity", ""), Severity.MEDIUM)
+        findings.append(
+            Finding(
+                rule_id=row["id"],
+                title=row.get("description", row["id"])[:200],
+                description=row.get("description") or "",
+                severity=sev,
+                source="cve_mirror",
+                references=[],
+                cvss_score=row.get("cvss_score"),
+                remediation=None,
+                metadata={"offline": True},
+            )
+        )
+    return findings
+
+
+def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
+    """Deduplicate findings by rule_id, keeping the one with the highest severity."""
+    seen: dict[str, Finding] = {}
+    for f in findings:
+        existing = seen.get(f.rule_id)
+        if existing is None or f.severity > existing.severity:
+            seen[f.rule_id] = f
+    return list(seen.values())
 
 
 def _max_severity(findings: list[Finding]) -> Severity:

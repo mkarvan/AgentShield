@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,30 @@ class ReportingConfig(BaseModel):
         return data
 
 
+class APIConfig(BaseModel):
+    """API credentials for external enrichment sources.
+
+    Keys can also be supplied via environment variables:
+      NVD_API_KEY      — NIST National Vulnerability Database API key
+      GITHUB_TOKEN     — GitHub Personal Access Token (for Advisory Database)
+    """
+
+    nvd_api_key: str | None = None
+    github_token: str | None = None
+
+    @model_validator(mode="after")
+    def _apply_env_vars(self) -> APIConfig:
+        if self.nvd_api_key is None:
+            env = os.environ.get("NVD_API_KEY")
+            if env:
+                self.nvd_api_key = env
+        if self.github_token is None:
+            env = os.environ.get("GITHUB_TOKEN")
+            if env:
+                self.github_token = env
+        return self
+
+
 class Config(BaseModel):
     defaults: SeverityPolicy = Field(default_factory=SeverityPolicy)
     ecosystems: dict[str, SeverityPolicy] = Field(default_factory=dict)
@@ -57,6 +82,8 @@ class Config(BaseModel):
     denylist: list[str] = Field(default_factory=list)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
+    api: APIConfig = Field(default_factory=APIConfig)
+    offline: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -70,6 +97,11 @@ class Config(BaseModel):
             val = data.get(field)
             if isinstance(val, dict):
                 data[field] = val.get("packages", [])
+        # Support AGENTSHIELD_OFFLINE env var overriding the config file
+        if not data.get("offline") and os.environ.get("AGENTSHIELD_OFFLINE", "").lower() in (
+            "1", "true", "yes"
+        ):
+            data["offline"] = True
         return data
 
     @classmethod

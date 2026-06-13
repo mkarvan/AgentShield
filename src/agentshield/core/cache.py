@@ -29,6 +29,29 @@ CREATE TABLE IF NOT EXISTS scan_cache (
     expires_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scan_cache_expires ON scan_cache(expires_at);
+
+CREATE TABLE IF NOT EXISTS cve_mirror (
+    id                TEXT PRIMARY KEY,
+    package           TEXT NOT NULL,
+    ecosystem         TEXT NOT NULL,
+    affected_versions TEXT NOT NULL,
+    severity          TEXT NOT NULL,
+    cvss_score        REAL,
+    description       TEXT,
+    last_fetched      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cve_mirror_pkg ON cve_mirror(package, ecosystem);
+
+CREATE TABLE IF NOT EXISTS malicious_packages (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    package   TEXT NOT NULL,
+    ecosystem TEXT NOT NULL,
+    reason    TEXT,
+    source    TEXT,
+    added_at  INTEGER NOT NULL,
+    UNIQUE(package, ecosystem)
+);
+CREATE INDEX IF NOT EXISTS idx_malicious_pkg ON malicious_packages(package, ecosystem);
 """
 
 
@@ -118,4 +141,106 @@ class ScanCache:
                 "SELECT COUNT(*) FROM scan_cache WHERE expires_at > ?", (now,)
             ) as cur:
                 live = (await cur.fetchone() or (0,))[0]
-        return {"total": total, "live": live, "expired": total - live}
+            async with db.execute("SELECT COUNT(*) FROM cve_mirror") as cur:
+                cve_count = (await cur.fetchone() or (0,))[0]
+            async with db.execute("SELECT COUNT(*) FROM malicious_packages") as cur:
+                mal_count = (await cur.fetchone() or (0,))[0]
+        return {
+            "total": total,
+            "live": live,
+            "expired": total - live,
+            "cve_mirror": cve_count,
+            "malicious_packages": mal_count,
+        }
+
+    # ------------------------------------------------------------------ cve_mirror
+
+    async def upsert_cve(
+        self,
+        cve_id: str,
+        package: str,
+        ecosystem: str,
+        affected_versions: str,
+        severity: str,
+        cvss_score: float | None,
+        description: str | None,
+    ) -> None:
+        now = int(time.time())
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            await db.execute(
+                """INSERT OR REPLACE INTO cve_mirror
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (cve_id, package, ecosystem, affected_versions, severity, cvss_score, description, now),
+            )
+            await db.commit()
+
+    async def upsert_cves_bulk(self, rows: list[tuple[Any, ...]]) -> int:
+        """Insert many CVE mirror rows at once. Returns inserted count."""
+        now = int(time.time())
+        records = [(*r, now) if len(r) == 7 else r for r in rows]
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            await db.executemany(
+                "INSERT OR REPLACE INTO cve_mirror VALUES (?,?,?,?,?,?,?,?)",
+                records,
+            )
+            await db.commit()
+        return len(records)
+
+    async def query_cve_mirror(self, package: str, ecosystem: str) -> list[dict[str, Any]]:
+        """Return all CVE mirror rows for a package/ecosystem."""
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM cve_mirror WHERE package = ? AND ecosystem = ?",
+                (package.lower(), ecosystem.lower()),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ malicious_packages
+
+    async def add_malicious_package(
+        self,
+        package: str,
+        ecosystem: str,
+        reason: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        now = int(time.time())
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            await db.execute(
+                """INSERT OR IGNORE INTO malicious_packages
+                   (package, ecosystem, reason, source, added_at)
+                   VALUES (?,?,?,?,?)""",
+                (package.lower(), ecosystem.lower(), reason, source, now),
+            )
+            await db.commit()
+
+    async def add_malicious_packages_bulk(self, rows: list[tuple[str, str, str | None, str | None]]) -> int:
+        """Bulk-insert (package, ecosystem, reason, source) tuples. Returns inserted count."""
+        now = int(time.time())
+        records = [(p.lower(), e.lower(), r, s, now) for p, e, r, s in rows]
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            await db.executemany(
+                "INSERT OR IGNORE INTO malicious_packages (package, ecosystem, reason, source, added_at) VALUES (?,?,?,?,?)",
+                records,
+            )
+            await db.commit()
+        return len(records)
+
+    async def is_malicious(self, package: str, ecosystem: str) -> dict[str, Any] | None:
+        """Return the malicious_packages row if the package is known-malicious, else None."""
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM malicious_packages WHERE package = ? AND ecosystem = ?",
+                (package.lower(), ecosystem.lower()),
+            ) as cur:
+                row = await cur.fetchone()
+        return dict(row) if row else None

@@ -99,6 +99,11 @@ files = ["src/agentshield"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "--cov=agentshield --cov-report=term-missing"
+markers = [
+    "integration: marks tests that require network access (deselect with -m 'not integration')",
+    "network: marks tests that make real network calls (skip with -m 'not network')",
+    "slow: marks tests that are slow (skip with -m 'not slow')",
+]
 
 [tool.coverage.run]
 source = ["src/agentshield"]

@@ -10,6 +10,7 @@ from httpx import Response
 
 from agentshield.core.models import Ecosystem, ScanRequest, Severity
 from agentshield.databases.nvd import (
+    NVD429Error,
     NVDClient,
     NVDRateLimiter,
     _cve_to_finding,
@@ -220,8 +221,17 @@ async def test_nvd_scan_filters_unrelated():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_nvd_scan_http_error_returns_empty():
+async def test_nvd_scan_429_raises_nvd429error():
     respx.get(_NVD_URL).mock(return_value=Response(429))
+    client = NVDClient()
+    with pytest.raises(NVD429Error):
+        await client.scan(_make_request())
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_nvd_scan_other_http_error_returns_empty():
+    respx.get(_NVD_URL).mock(return_value=Response(500))
     client = NVDClient()
     findings = await client.scan(_make_request())
     assert findings == []

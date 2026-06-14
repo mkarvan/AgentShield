@@ -253,6 +253,17 @@ agentshield serve --mcp
 
 **Exit codes for `agentshield scan`:** `0` = ALLOW/WARN/LOG_ASYNC, `1` = BLOCK.
 
+### API keys (optional but recommended)
+
+Set these to raise NVD rate limits and enable the GitHub Advisory Database:
+
+```bash
+export NVD_API_KEY=your-key-here     # 5 → 50 req/30s; get one at nvd.nist.gov/developers
+export GITHUB_TOKEN=ghp_...          # enables GitHub Advisory lookups; any classic PAT works
+```
+
+You can also set them in `~/.config/agentshield/config.toml` under `[api]`.
+
 ---
 
 ## Configuration
@@ -1213,6 +1224,12 @@ Run AgentShield as an HTTP REST API server on localhost:
 ```bash
 agentshield serve --http             # default port 8765
 agentshield serve --http --port 9000
+
+# Allow extra directories for CI/CD (comma-separated)
+agentshield serve --http --allowed-dirs /ci/workspace,/builds
+
+# Or via environment variable (colon-separated)
+AGENTSHIELD_ALLOWED_DIRS=/ci/workspace:/builds agentshield serve --http
 ```
 
 ### Endpoints
@@ -1227,7 +1244,19 @@ agentshield serve --http --port 9000
 
 All responses are JSON. Errors return `{"error": "..."}` with the appropriate HTTP status code.
 
-Path access for `/scan-file` and `/sbom` is restricted to an allowlist of directories (default: the current working directory and the user's home directory). Paths that resolve outside those directories return **403 Forbidden**. Pass a custom allowlist via the `allowed_dirs` constructor argument when embedding `HTTPServer` programmatically.
+### Path allowlist
+
+`/scan-file` and `/sbom` resolve the supplied path and verify it falls inside an allowed directory — anything outside returns **403 Forbidden**.
+
+**Default allowlist:** CWD, home directory, `/tmp`, and the system temp directory (e.g. `$TMPDIR` on macOS). This covers the common CI/CD pattern of writing manifests to `/tmp` before calling the HTTP API.
+
+**Expanding the allowlist:**
+
+| Method | Syntax |
+|--------|--------|
+| CLI flag | `--allowed-dirs /path/a,/path/b` (comma-separated) |
+| Env var | `AGENTSHIELD_ALLOWED_DIRS=/path/a:/path/b` (colon-separated) |
+| Python API | Pass `allowed_dirs=[Path("/path/a")]` to the `HTTPServer` constructor |
 
 The HTTP server uses Python's asyncio stdlib — no extra dependencies required.
 
@@ -1296,6 +1325,36 @@ The cache also stores a CVE mirror (populated by `agentshield cache warm`) and t
 agentshield cache stats    # show entry counts
 agentshield cache clear    # delete all cached scan results
 agentshield cache warm     # (re-)populate CVE mirror and malicious DB
+```
+
+---
+
+## Troubleshooting
+
+### "running vX but vY is installed" warning
+
+AgentShield checks at startup that the binary you're running matches the version installed in the current Python environment. If you see:
+
+```
+[agentshield] Warning: running v0.5.0 but v0.7.0 is installed. Your PATH may be pointing to a stale binary.
+```
+
+This means the `agentshield` binary found in your `PATH` comes from a different Python environment than the one that has the newer version installed. Common causes:
+
+- A global install (`pip install --user agentshield`) shadows a venv install
+- The shell session predates `pip install` (the old binary is still cached in `PATH`)
+
+**Fix:**
+
+```bash
+# 1. Make sure your venv is activated
+source .venv/bin/activate   # or: conda activate myenv
+
+# 2. Verify which binary is being run
+which agentshield
+
+# 3. If it still points to the wrong location, reinstall into the active env
+pip install --force-reinstall agentshield
 ```
 
 ---

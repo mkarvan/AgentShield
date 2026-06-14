@@ -256,7 +256,7 @@ class AgentShield:
         from agentshield.analyzers.typosquatting import TyposquattingChecker
         from agentshield.databases.github_advisory import GitHubAdvisoryClient
         from agentshield.databases.malicious_db import MaliciousDB
-        from agentshield.databases.nvd import NVDClient
+        from agentshield.databases.nvd import NVD429Error, NVDClient
         from agentshield.databases.osv import OSVClient
 
         tasks: list[Any] = [
@@ -280,12 +280,22 @@ class AgentShield:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # OSV is always index 0; use its result to decide NVD 429 log level
+        osv_result = results[0]
+        osv_has_findings = isinstance(osv_result, list) and bool(osv_result)
+
         findings: list[Finding] = []
         for source, r in zip(source_names, results, strict=False):
             if isinstance(r, list):
                 findings.extend(r)
             elif isinstance(r, Exception):
-                logger.warning("Check '%s' failed for %s: %s", source, request.package, r)
+                if source == "nvd" and isinstance(r, NVD429Error) and osv_has_findings:
+                    logger.debug(
+                        "NVD 429 for %s — OSV already returned results, skipping NVD",
+                        request.package,
+                    )
+                else:
+                    logger.warning("Check '%s' failed for %s: %s", source, request.package, r)
 
         # Deduplicate findings by rule_id (keep highest severity)
         return _dedupe_findings(findings)

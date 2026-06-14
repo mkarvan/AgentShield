@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 NVD_CVE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
+
+class NVD429Error(Exception):
+    """Raised when NVD returns HTTP 429 Too Many Requests."""
+
+
 _ECOSYSTEM_MAP = {
     Ecosystem.PYPI: "PyPI",
     Ecosystem.NPM: "npm",
@@ -87,6 +92,8 @@ class NVDClient:
     async def scan(self, request: ScanRequest) -> list[Finding]:
         try:
             return await self._fetch_findings(request)
+        except NVD429Error:
+            raise  # caller decides log level based on whether OSV already found results
         except Exception as exc:
             logger.warning("NVD scan failed for %s: %s", request.package, exc)
             return []
@@ -106,6 +113,8 @@ class NVDClient:
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(NVD_CVE_URL, params=params, headers=headers)
+            if resp.status_code == 429:
+                raise NVD429Error(f"NVD rate limit hit (429) for {request.package}")
             resp.raise_for_status()
             data = resp.json()
 

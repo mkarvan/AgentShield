@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from importlib.metadata import version as _meta_version
 from pathlib import Path
 
 import typer
@@ -28,6 +29,45 @@ from agentshield.core.scanner import AgentShield
 
 app = typer.Typer(name="agentshield", help="Security layer for AI agent package installations")
 console = Console()
+
+
+def _version_callback(value: bool | None) -> None:
+    if value:
+        try:
+            ver = _meta_version("agentshield")
+        except Exception:
+            ver = "0.0.0-dev"
+        typer.echo(f"agentshield {ver}")
+        raise typer.Exit()
+
+
+@app.callback()
+def callback(
+    version: bool | None = typer.Option(
+        None,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    """Security layer for AI agent package installations."""
+    import sys
+
+    import agentshield as _pkg
+
+    try:
+        installed = _meta_version("agentshield")
+        if installed != _pkg.__version__:
+            print(
+                f"[agentshield] Warning: running v{_pkg.__version__} but "
+                f"v{installed} is installed. Your PATH may be pointing to a stale binary. "
+                "Run 'which agentshield' and ensure your venv is active.",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
 
 
 @app.command()
@@ -233,11 +273,17 @@ def cache(
         console.print(f"[green]Cleared {deleted} cached entries.[/green]")
 
     elif action == "stats":
+        from agentshield.databases.malicious_db import MaliciousDB
+
         stats = asyncio.run(sc.stats())
+        mdb = MaliciousDB()
+        curated = mdb._get_curated()
+        curated_count = sum(len(v) for v in curated.values() if isinstance(v, list))
+        cached_mal = stats.get("malicious_packages", 0)
         console.print(f"[bold]Cache stats[/bold] — {cfg.cache.db_path}")
         console.print(f"  Scan results : {stats['live']} live / {stats['expired']} expired")
         console.print(f"  CVE mirror   : {stats.get('cve_mirror', 0)} entries")
-        console.print(f"  Malicious DB : {stats.get('malicious_packages', 0)} packages")
+        console.print(f"  Malicious DB : {curated_count} curated + {cached_mal} cached from OSV")
 
     elif action == "warm":
         asyncio.run(_cmd_warm(cfg, ecosystems))
@@ -699,6 +745,15 @@ def serve(
     ),
     port: int = typer.Option(8765, "--port", "-p", help="Port for HTTP server (default: 8765)"),
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+    allowed_dirs: str | None = typer.Option(
+        None,
+        "--allowed-dirs",
+        help=(
+            "Comma-separated extra directories allowed for /scan-file and /sbom "
+            "(e.g. /ci/workspace,/builds). Also accepted via AGENTSHIELD_ALLOWED_DIRS "
+            "(colon-separated). /tmp and the system temp dir are always allowed."
+        ),
+    ),
 ) -> None:
     """Start the AgentShield daemon.
 
@@ -707,7 +762,11 @@ def serve(
     agentshield serve --mcp        MCP tool server on stdio
     agentshield serve --http       HTTP REST server on localhost:8765
     agentshield serve --http --port 9000
+    agentshield serve --http --allowed-dirs /ci/workspace,/builds
     """
+    import os
+    import tempfile
+
     from agentshield.core.config import Config
 
     cfg = Config.load(config)
@@ -725,7 +784,37 @@ def serve(
     elif http:
         from agentshield.server.http_server import HTTPServer
 
-        http_server = HTTPServer(shield, port=port)
+        # Build allowed-dirs list: standard defaults + CLI flag + env var extras
+        extra_paths: list[Path] = []
+        if allowed_dirs:
+            for p in allowed_dirs.split(","):
+                p = p.strip()
+                if p:
+                    extra_paths.append(Path(p))
+        env_dirs = os.environ.get("AGENTSHIELD_ALLOWED_DIRS", "")
+        if env_dirs:
+            for p in env_dirs.split(":"):
+                p = p.strip()
+                if p:
+                    extra_paths.append(Path(p))
+
+        if extra_paths:
+            seen: set[Path] = set()
+            all_dirs: list[Path] = []
+            for d in [
+                Path.cwd(),
+                Path.home(),
+                Path("/tmp"),
+                Path(tempfile.gettempdir()),
+            ] + extra_paths:
+                r = d.resolve()
+                if r not in seen:
+                    seen.add(r)
+                    all_dirs.append(d)
+            http_server = HTTPServer(shield, port=port, allowed_dirs=all_dirs)
+        else:
+            http_server = HTTPServer(shield, port=port)
+
         console.print(f"[dim]AgentShield HTTP server starting on http://127.0.0.1:{port} …[/dim]")
         try:
             asyncio.run(http_server.start())

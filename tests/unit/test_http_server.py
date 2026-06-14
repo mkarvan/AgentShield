@@ -250,3 +250,20 @@ async def test_scan_file_allowed_path_succeeds(tmp_path: Path) -> None:
     code, body = await server._route("POST", "/scan-file", body_bytes)
     assert code == 200
     assert "decision" in body
+
+
+def test_default_allowed_dirs_include_tmp() -> None:
+    server = HTTPServer(MagicMock())
+    resolved = [d.resolve() for d in server.allowed_dirs]
+    import tempfile
+
+    assert Path("/tmp").resolve() in resolved or Path(tempfile.gettempdir()).resolve() in resolved
+
+
+def test_validate_path_allows_tmp_by_default(tmp_path: Path) -> None:
+    import tempfile
+
+    server = HTTPServer(MagicMock())
+    tmp_file = Path(tempfile.gettempdir()) / "agentshield_test_file.txt"
+    resolved, err = server._validate_path(str(tmp_file))
+    assert err is None

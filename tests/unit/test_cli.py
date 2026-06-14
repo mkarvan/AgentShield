@@ -182,3 +182,31 @@ def test_help_shows_commands():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "scan" in result.output
+
+
+# ── --version ─────────────────────────────────────────────────────────────────
+
+
+def test_version_flag_exits_0():
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert "agentshield" in result.output
+
+
+def test_version_flag_shows_version_number():
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    # Output should contain a version string (digits and dots)
+    import re
+
+    assert re.search(r"\d+\.\d+", result.output)
+
+
+# ── cache stats curated count ─────────────────────────────────────────────────
+
+
+def test_cache_stats_shows_curated_and_cached():
+    result = runner.invoke(app, ["cache", "stats"])
+    assert result.exit_code == 0
+    assert "curated" in result.output
+    assert "cached from OSV" in result.output

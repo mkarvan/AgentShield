@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -48,9 +49,23 @@ class HTTPServer:
         self.shield = shield
         self.host = host
         self.port = port
-        self.allowed_dirs: list[Path] = (
-            allowed_dirs if allowed_dirs is not None else [Path.cwd(), Path.home()]
-        )
+        if allowed_dirs is not None:
+            self.allowed_dirs = list(allowed_dirs)
+        else:
+            # Default: CWD, home, and system temp dirs (covers /tmp for CI/CD)
+            seen: set[Path] = set()
+            dirs: list[Path] = []
+            for d in [
+                Path.cwd(),
+                Path.home(),
+                Path("/tmp"),
+                Path(tempfile.gettempdir()),
+            ]:
+                r = d.resolve()
+                if r not in seen:
+                    seen.add(r)
+                    dirs.append(d)
+            self.allowed_dirs = dirs
 
     async def start(self) -> None:
         """Start the server and serve requests until cancelled."""

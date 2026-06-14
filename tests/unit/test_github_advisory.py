@@ -245,3 +245,101 @@ async def test_scan_npm_ecosystem():
     findings = await client.scan(req)
     assert len(findings) == 1
     assert findings[0].severity == Severity.CRITICAL
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_scan_cargo_ecosystem() -> None:
+    respx.post(GH_URL).mock(
+        return_value=Response(
+            200,
+            json={"data": {"securityVulnerabilities": {"nodes": [_make_node()]}}},
+        )
+    )
+    client = GitHubAdvisoryClient(token="ghp_test")
+    req = ScanRequest(package="serde", ecosystem=Ecosystem.CARGO)
+    findings = await client.scan(req)
+    assert len(findings) == 1
+    assert findings[0].source == "github_advisory"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_scan_rate_limited_returns_empty() -> None:
+    respx.post(GH_URL).mock(return_value=Response(429))
+    client = GitHubAdvisoryClient(token="ghp_test")
+    findings = await client.scan(_make_request())
+    assert findings == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_scan_malformed_response_missing_data_key() -> None:
+    respx.post(GH_URL).mock(return_value=Response(200, json={"meta": {"requestId": "abc123"}}))
+    client = GitHubAdvisoryClient(token="ghp_test")
+    findings = await client.scan(_make_request())
+    assert findings == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_scan_malformed_nodes_are_skipped() -> None:
+    """Nodes missing ghsaId are skipped; valid nodes still returned."""
+    bad_node: dict = {"advisory": {}, "vulnerableVersionRange": ">= 1.0.0"}
+    respx.post(GH_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "securityVulnerabilities": {
+                        "nodes": [bad_node, _make_node(ghsa_id="GHSA-good-good-good")]
+                    }
+                }
+            },
+        )
+    )
+    client = GitHubAdvisoryClient(token="ghp_test")
+    findings = await client.scan(_make_request())
+    assert len(findings) == 1
+    assert findings[0].metadata["ghsa_id"] == "GHSA-good-good-good"
+
+
+# ── Additional _node_to_finding edge cases ────────────────────────────────────
+
+
+def test_node_to_finding_unknown_severity_defaults_to_medium() -> None:
+    node = _make_node(severity="UNKNOWN_XYZ")
+    f = _node_to_finding(node, _make_request())
+    assert f is not None
+    assert f.severity == Severity.MEDIUM
+
+
+def test_node_to_finding_empty_summary_falls_back_to_description() -> None:
+    node = _make_node(summary="", description="Full detailed description here")
+    node["advisory"]["summary"] = ""
+    f = _node_to_finding(node, _make_request())
+    assert f is not None
+    assert "Full detailed description" in f.title
+
+
+def test_node_to_finding_references_missing_url_filtered() -> None:
+    node = _make_node()
+    node["advisory"]["references"] = [
+        {"url": "https://example.com/advisory"},
+        {},
+        {"url": ""},
+    ]
+    f = _node_to_finding(node, _make_request())
+    assert f is not None
+    assert f.references == ["https://example.com/advisory"]
+
+
+def test_ecosystem_map_covers_all_three_registries() -> None:
+    from agentshield.databases.github_advisory import _ECOSYSTEM_MAP
+
+    assert Ecosystem.PYPI in _ECOSYSTEM_MAP
+    assert Ecosystem.NPM in _ECOSYSTEM_MAP
+    assert Ecosystem.CARGO in _ECOSYSTEM_MAP
+    assert _ECOSYSTEM_MAP[Ecosystem.PYPI] == "PIP"
+    assert _ECOSYSTEM_MAP[Ecosystem.NPM] == "NPM"
+    assert _ECOSYSTEM_MAP[Ecosystem.CARGO] == "RUST"

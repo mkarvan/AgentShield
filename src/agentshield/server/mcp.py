@@ -94,7 +94,26 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "agentshield_posture",
         "description": "Generate a security posture report for the current environment.",
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tool_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Agent tool names to classify by risk level.",
+                },
+                "log_hours": {
+                    "type": "integer",
+                    "default": 24,
+                    "description": "Hours of async report log to include (default: 24).",
+                },
+                "skip_packages": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Skip installed-package CVE scan (faster).",
+                },
+            },
+        },
     },
 ]
 
@@ -181,7 +200,7 @@ class MCPServer:
         if name == "agentshield_scan_file":
             return await self._tool_scan_file(args)
         if name == "agentshield_posture":
-            return self._tool_posture()
+            return await self._tool_posture(args)
         return _tool_error(f"Unknown tool: {name!r}")
 
     async def _tool_scan(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -276,15 +295,26 @@ class MCPServer:
         except Exception as exc:
             return _tool_error(f"scan-file failed: {exc}")
 
-    def _tool_posture(self) -> dict[str, Any]:
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Posture check not yet implemented — coming in Phase 4.",
-                }
-            ]
-        }
+    async def _tool_posture(self, args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            from agentshield.core.config import Config
+            from agentshield.reports.posture import run_posture_check
+            from agentshield.reports.renderers import render_json
+
+            tool_names: list[str] | None = args.get("tool_names") or None
+            log_hours: int = int(args.get("log_hours", 24))
+            skip_packages: bool = bool(args.get("skip_packages", False))
+
+            cfg = Config.load(None)
+            report = await run_posture_check(
+                db_path=cfg.cache.db_path,
+                tool_names=tool_names,
+                async_log_hours=log_hours,
+                skip_package_scan=skip_packages,
+            )
+            return {"content": [{"type": "text", "text": render_json(report)}]}
+        except Exception as exc:
+            return _tool_error(f"Posture check failed: {exc}")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

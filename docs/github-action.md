@@ -44,6 +44,7 @@ jobs:
 | `deep` | Run deep static analysis (semgrep, bandit) — slower but more thorough | `false` |
 | `transitive` | Resolve and scan transitive (indirect) dependencies | `false` |
 | `github-token` | GitHub token for posting PR comments | `${{ github.token }}` |
+| `version` | AgentShield version to install (e.g. `0.7.0`). Pin this for reproducible CI scans. | `0.7.0` |
 
 ## Outputs
 

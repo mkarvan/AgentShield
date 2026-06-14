@@ -1225,6 +1225,8 @@ agentshield serve --http --port 9000
 
 All responses are JSON. Errors return `{"error": "..."}` with the appropriate HTTP status code.
 
+Path access for `/scan-file` and `/sbom` is restricted to an allowlist of directories (default: the current working directory and the user's home directory). Paths that resolve outside those directories return **403 Forbidden**. Pass a custom allowlist via the `allowed_dirs` constructor argument when embedding `HTTPServer` programmatically.
+
 The HTTP server uses Python's asyncio stdlib — no extra dependencies required.
 
 ---

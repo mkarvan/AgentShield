@@ -373,6 +373,7 @@ Expected response: JSON with `"decision": "ALLOW"` and an empty or populated fin
 | Tool | When to call |
 |------|-------------|
 | `agentshield_scan` | Before any pip install / npm install / cargo add |
+| `agentshield_scan_file` | To scan all packages in a requirements.txt / package.json / Cargo.toml at once |
 | `agentshield_posture` | To get a full security posture report |
 
 **Important — instruct your agent to use AgentShield:**
@@ -384,6 +385,10 @@ Before installing any package with pip, npm, or cargo, you MUST call the
 agentshield_scan tool first. If the result is BLOCK, do not install the package
 and explain why. If the result is NEEDS_CONFIRMATION, show the findings to the
 user and wait for approval. If the result is ALLOW or LOG_ASYNC, proceed.
+
+When working with a manifest file (requirements.txt, package.json, Cargo.toml),
+use agentshield_scan_file instead — it scans all packages in the file at once.
+If any package is BLOCKED, do not proceed with the bulk install.
 
 Pass context_hint to explain why you want the package.
 ```
@@ -520,6 +525,13 @@ kill $SHIELD_PID
 ```
 Expected: `{"jsonrpc":"2.0","id":1,"result":{"pong":true}}`
 
+**6f. Manifest file scan:**
+```bash
+echo -e "requests\nflask" > /tmp/test-req.txt
+agentshield scan-file /tmp/test-req.txt
+```
+Expected: A Rich summary table listing `requests` and `flask`, each with their scan status (ALLOW or findings). Exit code 0 if neither is blocked.
+
 ---
 
 ## Quick-reference cheat sheet
@@ -532,6 +544,11 @@ agentshield scan <package>==<version> --ecosystem pypi|npm|cargo
 
 # Deep scan (downloads wheel, runs static analysis)
 agentshield scan <package> --deep
+
+# Scan all packages in a manifest file
+agentshield scan-file requirements.txt
+agentshield scan-file package.json
+agentshield scan-file Cargo.toml
 
 # View async report log + installed package CVEs
 agentshield posture

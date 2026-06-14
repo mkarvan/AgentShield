@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![v0.1.0](https://img.shields.io/badge/version-0.1.0-brightgreen)](#)
+[![v0.2.0](https://img.shields.io/badge/version-0.2.0-brightgreen)](#)
 
 ---
 
@@ -212,6 +212,9 @@ agentshield scan requests==2.28.0 --ecosystem pypi
 # 2. Deep scan — download wheel and run static analysis
 agentshield scan some-new-package --ecosystem pypi --deep
 
+# Scan an entire requirements.txt at once
+agentshield scan-file requirements.txt
+
 # 3. Populate local database for offline use (~2–5 min first run)
 agentshield cache warm
 
@@ -367,6 +370,40 @@ agentshield scan serde --ecosystem cargo
 agentshield scan unknown-pkg --deep
 agentshield scan known-pkg --offline
 agentshield scan pkg -c /custom/config.toml
+```
+
+### `agentshield scan-file`
+
+Scan all packages listed in a manifest file.
+
+```
+agentshield scan-file <path> [OPTIONS]
+
+Arguments:
+  path    Path to a manifest file. Supported formats:
+            requirements.txt (and variants: test-requirements.txt, dev-requirements.txt, etc.)
+            package.json
+            package-lock.json
+            Cargo.toml
+
+Options:
+  -c, --config PATH   Path to config.toml (default: ~/.config/agentshield/config.toml)
+```
+
+**Format detection:** The format is auto-detected from the filename. If the filename is not a standard name, the file extension is used as a fallback (`.txt` → requirements, `.json` → package.json, `.toml` → Cargo.toml).
+
+**Output:** A Rich summary table showing the status of each package (ALLOW / BLOCK / NEEDS_CONFIRMATION / LOG_ASYNC) with severity and finding count. Overall verdict printed after the table.
+
+**Exit codes:** `0` = no packages blocked, `1` = one or more packages BLOCKED.
+
+```bash
+# Examples
+agentshield scan-file requirements.txt
+agentshield scan-file test-requirements.txt
+agentshield scan-file package.json
+agentshield scan-file package-lock.json
+agentshield scan-file Cargo.toml
+agentshield scan-file /path/to/dev-requirements.txt -c /custom/config.toml
 ```
 
 ### `agentshield posture`
@@ -544,6 +581,7 @@ SkillResult(
 | Tool name | Description |
 |-----------|-------------|
 | `agentshield_scan` | Scan a package; returns decision, findings, max severity |
+| `agentshield_scan_file` | Scan all packages in a manifest file |
 | `agentshield_posture` | Run posture check; returns full JSON report |
 
 **`agentshield_scan` input schema:**
@@ -575,6 +613,13 @@ SkillResult(
       "remediation": "Upgrade to FooLib >= 2.1.0"
     }
   ]
+}
+```
+
+**`agentshield_scan_file` input schema:**
+```json
+{
+  "path": "string (required) — path to manifest file"
 }
 ```
 

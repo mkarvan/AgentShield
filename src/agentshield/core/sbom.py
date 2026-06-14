@@ -17,11 +17,16 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 from agentshield.core.models import Ecosystem, ScanResult
 
-_AGENTSHIELD_VERSION = "0.1.0"
+try:
+    _AGENTSHIELD_VERSION = _pkg_version("agentshield")
+except PackageNotFoundError:
+    _AGENTSHIELD_VERSION = "0.0.0-dev"
 _CDX_SPEC = "1.4"
 
 # CycloneDX severity strings (lowercase)

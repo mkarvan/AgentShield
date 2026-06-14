@@ -144,7 +144,7 @@ class MaliciousDB:
             if osv_eco is None:
                 continue
             try:
-                rows = await _fetch_malicious_from_osv(osv_eco)
+                rows = await _fetch_malicious_from_osv(osv_eco, self)
                 if rows:
                     inserted = await cache.add_malicious_packages_bulk(rows)
                     total += inserted
@@ -170,6 +170,7 @@ _OSV_FETCH_CONCURRENCY = 5
 
 async def _fetch_malicious_from_osv(
     ecosystem: str,
+    db: MaliciousDB,
 ) -> list[tuple[str, str, str | None, str | None]]:
     """Query OSV for known-malicious advisories in a given ecosystem.
 
@@ -180,9 +181,6 @@ async def _fetch_malicious_from_osv(
     if curated_key is None:
         return []
 
-    # Use singleton instance to leverage the in-memory cache instead of
-    # re-reading JSON from disk on every warm() call.
-    db = MaliciousDB()
     packages_to_check = db._get_curated().get(curated_key, [])
     if not packages_to_check:
         return []

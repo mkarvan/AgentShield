@@ -268,7 +268,7 @@ def _cvss3_score(vector: str) -> float | None:
             else min(1.08 * (impact + exploitability), 10.0)
         )
         return math.ceil(raw * 10) / 10
-    except Exception:
+    except (KeyError, ValueError):
         return None
 
 

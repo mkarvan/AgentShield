@@ -211,6 +211,7 @@ def posture(
                 tool_names=tool_names,
                 async_log_hours=async_log_hours,
                 skip_package_scan=skip_packages,
+                offline=cfg.offline,
             )
         )
 

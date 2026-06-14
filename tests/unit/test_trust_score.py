@@ -53,7 +53,7 @@ def test_to_finding_returns_none_for_moderate() -> None:
 
 
 def test_to_finding_high_severity_for_low_trust() -> None:
-    ts = TrustScoreResult(score=30, label="low-trust")
+    ts = TrustScoreResult(score=30, label="low-trust", signals={"age_days": 30, "release_count": 1})
     finding = ts.to_finding(_pypi_req("shady-pkg"))
     assert finding is not None
     assert finding.rule_id == "T5.1"
@@ -62,14 +62,16 @@ def test_to_finding_high_severity_for_low_trust() -> None:
 
 
 def test_to_finding_critical_for_suspicious() -> None:
-    ts = TrustScoreResult(score=5, label="suspicious")
+    ts = TrustScoreResult(score=5, label="suspicious", signals={"age_days": 5, "release_count": 0})
     finding = ts.to_finding(_pypi_req())
     assert finding is not None
     assert finding.severity == Severity.CRITICAL
 
 
 def test_to_finding_boundary_49() -> None:
-    ts = TrustScoreResult(score=49, label="low-trust")
+    ts = TrustScoreResult(
+        score=49, label="low-trust", signals={"age_days": 100, "release_count": 2}
+    )
     finding = ts.to_finding(_pypi_req())
     assert finding is not None
 

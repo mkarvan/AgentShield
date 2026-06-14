@@ -172,7 +172,11 @@ class AgentShield:
 
         # Fold trust-score finding into the findings list if below threshold
         if trust_result is not None:
-            ts_finding = trust_result.to_finding(request)
+            ts_finding = trust_result.to_finding(
+                request,
+                threshold=self.config.trust_score.threshold,
+                min_signals=self.config.trust_score.min_signals,
+            )
             if ts_finding is not None:
                 findings = _dedupe_findings(findings + [ts_finding])
 

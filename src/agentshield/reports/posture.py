@@ -187,11 +187,11 @@ async def _load_async_log(db_path: Path, since_hours: int = 24) -> list[AsyncLog
     return entries
 
 
-async def _load_drift_events(db_path: Path) -> list[DriftEvent]:
+async def _load_drift_events(db_path: Path, *, offline: bool = False) -> list[DriftEvent]:
     """Load recent drift events from scan_history using the AgentShield scanner."""
     from agentshield.analyzers.drift_detector import DriftDetector
     from agentshield.core.cache import ScanCache
-    from agentshield.core.config import CacheConfig
+    from agentshield.core.config import CacheConfig, Config
     from agentshield.core.models import DecisionAction, Ecosystem
     from agentshield.core.scanner import AgentShield
 
@@ -200,9 +200,13 @@ async def _load_drift_events(db_path: Path) -> list[DriftEvent]:
     if not allowed_pairs:
         return []
 
+    if offline:
+        return []
+
     import asyncio
 
-    shield = AgentShield()
+    config = Config(offline=False, cache=CacheConfig(db_path=db_path))
+    shield = AgentShield(config=config)
     dd = DriftDetector(db_path)
     events: list[DriftEvent] = []
 
@@ -247,6 +251,7 @@ async def run_posture_check(
     tool_names: list[str] | None = None,
     async_log_hours: int = 24,
     skip_package_scan: bool = False,
+    offline: bool = False,
 ) -> PostureReport:
     """Run the posture check and return a PostureReport.
 
@@ -255,6 +260,7 @@ async def run_posture_check(
         tool_names: Optional list of agent tool names to classify.
         async_log_hours: How many hours of async report log to include.
         skip_package_scan: If True, skip installed-package CVE lookups (faster).
+        offline: If True, skip network-dependent drift re-scans.
     """
     # Enumerate installed packages
     package_summaries: list[PackageSummary] = []
@@ -303,7 +309,7 @@ async def run_posture_check(
     )
 
     # Drift events — re-scan previously-allowed packages
-    drift_events = await _load_drift_events(db_path)
+    drift_events = await _load_drift_events(db_path, offline=offline)
 
     return PostureReport(
         generated_at=datetime.now(UTC),

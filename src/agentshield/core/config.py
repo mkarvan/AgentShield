@@ -116,6 +116,20 @@ class RateLimitsConfig(BaseModel):
     max_wheel_mb_per_session: int = 500
 
 
+class TrustScoreConfig(BaseModel):
+    """Trust-score (T5.1) behaviour.
+
+    Configure in config.toml under [trust_score]:
+
+        [trust_score]
+        threshold = 40       # emit T5.1 below this score (default 50)
+        min_signals = 2      # require at least this many concrete signals
+    """
+
+    threshold: int = 50
+    min_signals: int = 2
+
+
 class Config(BaseModel):
     defaults: SeverityPolicy = Field(default_factory=SeverityPolicy)
     ecosystems: dict[str, SeverityPolicy] = Field(default_factory=dict)
@@ -127,6 +141,7 @@ class Config(BaseModel):
     api: APIConfig = Field(default_factory=APIConfig)
     license_policy: LicensePolicy = Field(default_factory=LicensePolicy)
     rate_limits: RateLimitsConfig = Field(default_factory=RateLimitsConfig)
+    trust_score: TrustScoreConfig = Field(default_factory=TrustScoreConfig)
     offline: bool = False
 
     @model_validator(mode="before")

@@ -32,6 +32,7 @@ _LABEL_THRESHOLDS: list[tuple[int, str]] = [
 ]
 
 _LOW_TRUST_THRESHOLD = 50
+_MIN_SIGNALS = 2
 
 
 def _score_to_label(score: int) -> str:
@@ -47,9 +48,16 @@ class TrustScoreResult:
     label: str
     signals: dict[str, Any] = field(default_factory=dict)
 
-    def to_finding(self, request: ScanRequest) -> Finding | None:
-        """Return a T5.1 Finding if score is below the low-trust threshold."""
-        if self.score >= _LOW_TRUST_THRESHOLD:
+    def to_finding(
+        self,
+        request: ScanRequest,
+        threshold: int = _LOW_TRUST_THRESHOLD,
+        min_signals: int = _MIN_SIGNALS,
+    ) -> Finding | None:
+        """Return a T5.1 Finding if score is below threshold and enough signals exist."""
+        if self.score >= threshold:
+            return None
+        if len(self.signals) < min_signals:
             return None
         sev = Severity.HIGH if self.score >= 20 else Severity.CRITICAL
         return Finding(
@@ -167,8 +175,10 @@ async def _fetch_pypi_signals(
                 else:
                     dl_points = 0
                 score_parts.append((dl_points, 30))
+            else:
+                score_parts.append((15, 30))  # neutral when stats unavailable
         except Exception:
-            pass
+            score_parts.append((15, 30))  # neutral when stats unavailable
 
     except Exception as exc:
         logger.debug("PyPI trust signal fetch failed for %s: %s", package, exc)
@@ -230,8 +240,10 @@ async def _fetch_npm_signals(
                 else:
                     dl_points = 0
                 score_parts.append((dl_points, 30))
+            else:
+                score_parts.append((15, 30))  # neutral when stats unavailable
         except Exception:
-            pass
+            score_parts.append((15, 30))  # neutral when stats unavailable
 
     except Exception as exc:
         logger.debug("npm trust signal fetch failed for %s: %s", package, exc)

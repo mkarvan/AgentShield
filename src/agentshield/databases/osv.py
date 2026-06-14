@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any
 
 import httpx
 
 from agentshield.core.models import Ecosystem, Finding, ScanRequest, Severity
+
+logger = logging.getLogger(__name__)
 
 OSV_API = "https://api.osv.dev/v1/query"
 
@@ -28,6 +31,18 @@ _SEVERITY_RATING_MAP: dict[str, Severity] = {
 
 class OSVClient:
     async def scan(self, request: ScanRequest) -> list[Finding]:
+        try:
+            return await self._fetch_findings(request)
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "OSV scan failed for %s: HTTP %s", request.package, exc.response.status_code
+            )
+            return []
+        except Exception as exc:
+            logger.warning("OSV scan failed for %s: %s", request.package, exc)
+            return []
+
+    async def _fetch_findings(self, request: ScanRequest) -> list[Finding]:
         payload: dict[str, Any] = {
             "package": {
                 "name": request.package,

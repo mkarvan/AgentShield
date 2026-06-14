@@ -7,6 +7,7 @@ responsible for cleanup (tempfile.TemporaryDirectory handles it automatically).
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 import zipfile
 from collections.abc import AsyncIterator
@@ -67,9 +68,21 @@ async def _download(url: str, dest: Path) -> None:
                 fh.write(chunk)
 
 
+def _safe_zipfile_extract(zf: zipfile.ZipFile, extract_to: Path) -> None:
+    """Extract a zip archive, blocking path-traversal (zip-slip) attacks."""
+    target_dir = os.path.realpath(extract_to)
+    for member in zf.infolist():
+        member_path = os.path.realpath(os.path.join(target_dir, member.filename))
+        if not (member_path.startswith(target_dir + os.sep) or member_path == target_dir):
+            raise WheelExtractionError(
+                f"Zip-slip detected: {member.filename!r} resolves outside extraction directory"
+            )
+        zf.extract(member, extract_to)
+
+
 def _extract_wheel(wheel_path: Path, extract_to: Path) -> None:
     with zipfile.ZipFile(wheel_path, "r") as zf:
-        zf.extractall(extract_to)
+        _safe_zipfile_extract(zf, extract_to)
 
 
 def _extract_sdist(sdist_path: Path, extract_to: Path) -> None:
@@ -80,7 +93,7 @@ def _extract_sdist(sdist_path: Path, extract_to: Path) -> None:
             tf.extractall(extract_to, filter="data")
     elif zipfile.is_zipfile(sdist_path):
         with zipfile.ZipFile(sdist_path, "r") as zf:
-            zf.extractall(extract_to)
+            _safe_zipfile_extract(zf, extract_to)
     else:
         raise WheelExtractionError(f"Unknown sdist format: {sdist_path.name}")
 

@@ -14,6 +14,7 @@ from agentshield.databases.nvd import (
     NVDRateLimiter,
     _cve_to_finding,
     _extract_metrics,
+    _package_in_cpe_configurations,
 )
 
 _NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -254,3 +255,99 @@ async def test_nvd_scan_no_api_key_no_header():
     client = NVDClient(api_key=None)
     await client.scan(_make_request())
     assert "apikey" not in {k.lower() for k in sent_headers}
+
+
+# ── False-positive filtering (word-boundary + CPE) ──────────────────────────────
+
+
+def test_cve_word_boundary_rejects_prefix_match():
+    """'serde' must NOT match a description containing only 'serdev'."""
+    cve = _make_cve(description="A vulnerability in the serdev kernel driver")
+    f = _cve_to_finding(cve["cve"], "serde")
+    assert f is None
+
+
+def test_cve_word_boundary_rejects_suffix_match():
+    """'pip' must NOT match a description containing only 'pip-related' or 'piping'."""
+    cve = _make_cve(description="A piping mechanism exposes data in httpd")
+    f = _cve_to_finding(cve["cve"], "pip")
+    assert f is None
+
+
+def test_cve_word_boundary_accepts_exact_word():
+    """A whole-word match must still produce a finding."""
+    cve = _make_cve(description="The serde crate allows arbitrary deserialization")
+    f = _cve_to_finding(cve["cve"], "serde")
+    assert f is not None
+
+
+def test_cve_word_boundary_accepts_word_at_sentence_end():
+    cve = _make_cve(description="Critical RCE found in serde.")
+    f = _cve_to_finding(cve["cve"], "serde")
+    assert f is not None
+
+
+# ── _package_in_cpe_configurations ─────────────────────────────────────────────
+
+
+def _make_cve_with_cpe(description: str, cpe_criteria: str) -> dict:
+    cve = _make_cve(description=description)
+    cve["cve"]["configurations"] = [
+        {
+            "nodes": [
+                {
+                    "cpeMatch": [
+                        {"criteria": cpe_criteria, "matchCriteriaId": "abc", "vulnerable": True}
+                    ]
+                }
+            ]
+        }
+    ]
+    return cve
+
+
+def test_cpe_check_accepts_when_package_in_cpe():
+    cve = _make_cve_with_cpe(
+        description="serde deserialization flaw",
+        cpe_criteria="cpe:2.3:a:serde_project:serde:*:*:*:*:*:rust:*:*",
+    )
+    f = _cve_to_finding(cve["cve"], "serde")
+    assert f is not None
+
+
+def test_cpe_check_rejects_when_package_absent_from_cpe():
+    """Even if the description matches, a missing CPE reference must disqualify the CVE."""
+    cve = _make_cve_with_cpe(
+        description="serde-like serialization flaw in serde",
+        cpe_criteria="cpe:2.3:a:linux:linux_kernel:*:*:*:*:*:*:*:*",
+    )
+    f = _cve_to_finding(cve["cve"], "serde")
+    assert f is None
+
+
+def test_cpe_check_passes_through_when_no_configurations():
+    """Without a 'configurations' key the CPE filter must not apply."""
+    cve = _make_cve(description="serde has a vulnerability")
+    assert "configurations" not in cve["cve"]
+    f = _cve_to_finding(cve["cve"], "serde")
+    assert f is not None
+
+
+def test_package_in_cpe_configurations_true():
+    cve_data = {
+        "configurations": [
+            {"nodes": [{"cpeMatch": [{"criteria": "cpe:2.3:a:requests_project:requests:*"}]}]}
+        ]
+    }
+    assert _package_in_cpe_configurations("requests", cve_data) is True
+
+
+def test_package_in_cpe_configurations_false():
+    cve_data = {
+        "configurations": [{"nodes": [{"cpeMatch": [{"criteria": "cpe:2.3:a:apache:httpd:*"}]}]}]
+    }
+    assert _package_in_cpe_configurations("requests", cve_data) is False
+
+
+def test_package_in_cpe_configurations_empty():
+    assert _package_in_cpe_configurations("requests", {"configurations": []}) is False

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -120,6 +121,17 @@ class NVDClient:
         return findings
 
 
+def _package_in_cpe_configurations(package: str, cve: dict[str, Any]) -> bool:
+    """Return True if the package name appears in any CPE criteria across all configurations."""
+    pkg_lower = package.lower()
+    for config in cve.get("configurations", []):
+        for node in config.get("nodes", []):
+            for cpe_match in node.get("cpeMatch", []):
+                if pkg_lower in cpe_match.get("criteria", "").lower():
+                    return True
+    return False
+
+
 def _cve_to_finding(cve: dict[str, Any], package: str) -> Finding | None:
     cve_id: str = cve.get("id", "")
     if not cve_id:
@@ -128,9 +140,14 @@ def _cve_to_finding(cve: dict[str, Any], package: str) -> Finding | None:
     descriptions = cve.get("descriptions", [])
     description = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")
 
-    # Only include CVEs where the package name appears in the description
-    # This reduces false positives from broad keyword searches
-    if package.lower() not in description.lower():
+    # Word-boundary match prevents e.g. "serde" matching "serdev" or "serializer"
+    if not re.search(r"\b" + re.escape(package.lower()) + r"\b", description.lower()):
+        return None
+
+    # When CPE configuration data is present, at least one entry must reference the
+    # package — a description-only mention may be incidental (e.g. kernel CVEs that
+    # mention a similarly-named component in passing)
+    if cve.get("configurations") and not _package_in_cpe_configurations(package, cve):
         return None
 
     severity, cvss_score = _extract_metrics(cve)

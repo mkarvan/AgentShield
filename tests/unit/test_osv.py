@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 import respx
-from httpx import HTTPStatusError, Response
+from httpx import Response
 
 from agentshield.core.models import Ecosystem, ScanRequest, Severity
 from agentshield.databases.osv import OSVClient, _cvss3_base_score, _extract_severity
@@ -160,11 +160,22 @@ async def test_malicious_package_classified_as_t1_1():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_http_error_propagates():
+async def test_http_500_returns_empty():
+    """HTTP 5xx must be caught and return an empty list (consistent with NVD behaviour)."""
     respx.post(OSV_URL).mock(return_value=Response(500))
     client = OSVClient()
-    with pytest.raises(HTTPStatusError):
-        await client.scan(_req())
+    findings = await client.scan(_req())
+    assert findings == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_http_429_returns_empty():
+    """Rate-limit responses must be caught and return an empty list."""
+    respx.post(OSV_URL).mock(return_value=Response(429))
+    client = OSVClient()
+    findings = await client.scan(_req())
+    assert findings == []
 
 
 @pytest.mark.asyncio

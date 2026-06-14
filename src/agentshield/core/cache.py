@@ -7,7 +7,12 @@ from typing import Any
 import aiosqlite
 
 from agentshield.core.config import CacheConfig
-from agentshield.core.models import ScanRequest, ScanResult
+from agentshield.core.models import DecisionAction, ScanRequest, ScanResult
+
+# BLOCK entries are written with this far-future expires_at so they survive TTL expiry.
+# When enrichment sources are temporarily unavailable on a re-scan, a previously-confirmed
+# malicious package must never silently flip to ALLOW just because the cache entry expired.
+_BLOCK_EXPIRES_AT = 9_999_999_999  # year ~2286 — effectively never expires
 
 _TTL_BY_SEVERITY: dict[str, int] = {
     "NONE": 7 * 24 * 3600,  # clean scan — 7 days
@@ -106,7 +111,12 @@ class ScanCache:
         now = int(time.time())
         severity = result.max_severity.value
         ttl = _TTL_BY_SEVERITY.get(severity, self.config.ttl_hours * 3600)
-        expires_at = now + ttl
+        # BLOCK decisions must never expire — a confirmed-malicious package stays
+        # blocked even when enrichment sources are unavailable on a future re-scan.
+        if result.decision.action == DecisionAction.BLOCK:
+            expires_at = _BLOCK_EXPIRES_AT
+        else:
+            expires_at = now + ttl
 
         async with aiosqlite.connect(self.config.db_path) as db:
             await self._ensure_schema(db)

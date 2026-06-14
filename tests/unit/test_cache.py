@@ -4,12 +4,13 @@ import time
 
 import pytest
 
-from agentshield.core.cache import _TTL_BY_SEVERITY, ScanCache
+from agentshield.core.cache import _BLOCK_EXPIRES_AT, _TTL_BY_SEVERITY, ScanCache
 from agentshield.core.config import CacheConfig
 from agentshield.core.models import (
     Decision,
     DecisionAction,
     Ecosystem,
+    Finding,
     ScanRequest,
     ScanResult,
     Severity,
@@ -172,3 +173,93 @@ async def test_stats_mixed(tmp_path, monkeypatch):
     assert stats["total"] == 2
     assert stats["live"] == 1
     assert stats["expired"] == 1
+
+
+# ── Persistent BLOCK cache ────────────────────────────────────────────────────
+
+
+def _make_block_result(request: ScanRequest) -> ScanResult:
+    finding = Finding(
+        rule_id="T1.1",
+        title="Known malicious package",
+        severity=Severity.CRITICAL,
+        source="malicious_db",
+    )
+    return ScanResult(
+        request=request,
+        findings=[finding],
+        max_severity=Severity.CRITICAL,
+        decision=Decision(action=DecisionAction.BLOCK, reason="Malicious package"),
+        scan_duration_ms=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_block_result_uses_far_future_expires_at(tmp_path):
+    """BLOCK decisions must be stored with expires_at = _BLOCK_EXPIRES_AT."""
+    import aiosqlite
+
+    cache = _make_cache(tmp_path)
+    req = _make_request(package="evil-pkg")
+    await cache.set(req, _make_block_result(req))
+
+    db_path = tmp_path / "test_cache.db"
+    async with (
+        aiosqlite.connect(db_path) as db,
+        db.execute("SELECT expires_at FROM scan_cache") as cur,
+    ):
+        row = await cur.fetchone()
+    assert row is not None
+    assert row[0] == _BLOCK_EXPIRES_AT
+
+
+@pytest.mark.asyncio
+async def test_block_result_survives_ttl_expiry(tmp_path, monkeypatch):
+    """A BLOCK cache entry must still be returned even when all normal TTLs have expired."""
+    cache = _make_cache(tmp_path)
+    req = _make_request(package="evil-pkg")
+    await cache.set(req, _make_block_result(req))
+
+    # Wind clock far past the longest normal TTL (7 days for NONE severity)
+    far_future = int(time.time()) + 365 * 24 * 3600  # 1 year in the future
+    monkeypatch.setattr("agentshield.core.cache.time.time", lambda: far_future)
+
+    result = await cache.get(req)
+    assert result is not None, "BLOCK entry must not expire"
+    assert result.decision.action == DecisionAction.BLOCK
+
+
+@pytest.mark.asyncio
+async def test_non_block_result_still_expires(tmp_path, monkeypatch):
+    """Non-BLOCK entries (ALLOW) should still be subject to normal TTL expiry."""
+    cache = _make_cache(tmp_path)
+    req = _make_request(package="safe-pkg")
+    await cache.set(req, _make_result(req, Severity.NONE))
+
+    future_time = int(time.time()) + _TTL_BY_SEVERITY["NONE"] + 1
+    monkeypatch.setattr("agentshield.core.cache.time.time", lambda: future_time)
+
+    result = await cache.get(req)
+    assert result is None, "ALLOW entry should expire normally"
+
+
+@pytest.mark.asyncio
+async def test_block_not_deleted_by_clear_expired(tmp_path, monkeypatch):
+    """clear_expired() must not remove BLOCK entries."""
+    cache = _make_cache(tmp_path)
+    req_block = _make_request(package="evil-pkg")
+    req_clean = _make_request(package="safe-pkg")
+    await cache.set(req_block, _make_block_result(req_block))
+    await cache.set(req_clean, _make_result(req_clean, Severity.NONE))
+
+    # Jump far into the future so normal entries would have expired
+    far_future = int(time.time()) + _TTL_BY_SEVERITY["NONE"] + 1
+    monkeypatch.setattr("agentshield.core.cache.time.time", lambda: far_future)
+
+    deleted = await cache.clear_expired()
+    assert deleted == 1  # only the clean entry should be removed
+
+    # BLOCK entry must still be retrievable
+    result = await cache.get(req_block)
+    assert result is not None
+    assert result.decision.action == DecisionAction.BLOCK

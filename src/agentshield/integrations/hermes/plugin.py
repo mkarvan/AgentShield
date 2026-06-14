@@ -140,6 +140,10 @@ _VALUE_FLAGS = frozenset(
 # Handles: requests, requests==2.28.0, requests[security], requests[security]>=2
 _PKG_SPEC_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(?:[><=!~^@][^\s]*)?$")
 
+# Patterns in install args that we cannot statically resolve
+_EXPANSION_RE = re.compile(r"\$(?:\{[^}]*\}|\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)")
+_GIT_URL_RE = re.compile(r"git\+(?:https?|ssh)://\S+", re.IGNORECASE)
+
 
 # ── helpers (module-level, testable) ─────────────────────────────────────────
 
@@ -183,8 +187,8 @@ def _tokenize_packages(args_str: str) -> list[str]:
             else:
                 i += 1
             continue
-        # Skip filesystem paths and URLs
-        if re.match(r"^(?:[/~.]|https?://)", token):
+        # Skip filesystem paths, plain URLs, and VCS URLs (git+https:// etc.)
+        if re.match(r"^(?:[/~.]|https?://|git\+)", token):
             i += 1
             continue
         m = _PKG_SPEC_RE.match(token)
@@ -192,6 +196,25 @@ def _tokenize_packages(args_str: str) -> list[str]:
             packages.append(m.group(1))
         i += 1
     return packages
+
+
+def _find_shell_suspicions(command: str) -> list[str]:
+    """Return descriptions of install-arg patterns that cannot be statically analyzed.
+
+    Covers: shell variable/command expansion ($VAR, ${VAR}, $(cmd)) and VCS URLs
+    (git+https://, git+ssh://) where the real package identity cannot be verified.
+    """
+    suspicions: list[str] = []
+    for pattern, _ in _INSTALL_PATTERNS:
+        for match in pattern.finditer(command):
+            args_str = match.group(1)
+            for var_match in _EXPANSION_RE.finditer(args_str):
+                suspicions.append(
+                    f"shell variable/command expansion '{var_match.group()}' in package position"
+                )
+            for git_match in _GIT_URL_RE.finditer(args_str):
+                suspicions.append(f"unanalyzable VCS URL '{git_match.group()}'")
+    return suspicions
 
 
 # ── plugin ────────────────────────────────────────────────────────────────────
@@ -245,6 +268,16 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
         command = _extract_command(call.args)
         if not command:
             return call
+
+        # Check for patterns that cannot be statically analyzed (must happen before
+        # _parse_shell_packages so that commands like `pip install $PKG` that produce
+        # an empty pkg_list are not accidentally passed through)
+        suspicions = _find_shell_suspicions(command)
+        if suspicions:
+            return ToolResult.error(
+                "AgentShield blocked shell command — cannot verify package source:\n"
+                + "\n".join(f"  • {s}" for s in suspicions)
+            )
 
         pkg_list = _parse_shell_packages(command)
         if not pkg_list:

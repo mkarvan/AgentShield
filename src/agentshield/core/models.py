@@ -160,6 +160,8 @@ class ScanRequest(BaseModel):
         context_hint: Short snippet explaining why the agent wants this package.
                       Used by the T4.1 prompt-injection heuristic.
         deep: If True, static analysis (semgrep/bandit) runs in addition to CVE lookups.
+        transitive: If True, resolve and scan all transitive dependencies too.
+        transitive_depth: Maximum recursion depth when resolving the dependency tree.
     """
 
     package: str
@@ -168,6 +170,8 @@ class ScanRequest(BaseModel):
     source: str | None = None
     context_hint: str | None = None
     deep: bool = False
+    transitive: bool = False
+    transitive_depth: int = Field(default=3, ge=1, le=10)
 
     @field_validator("package")
     @classmethod
@@ -200,6 +204,8 @@ class ScanResult(BaseModel):
         scan_duration_ms: Wall-clock time for this scan in milliseconds.
         cache_hit: True if the result was served from the local cache.
         scanned_at: UTC timestamp when the scan completed.
+        transitive_results: Scan results for each resolved transitive dependency.
+                            Populated only when ScanRequest.transitive is True.
     """
 
     request: ScanRequest
@@ -209,6 +215,7 @@ class ScanResult(BaseModel):
     scan_duration_ms: int = 0
     cache_hit: bool = False
     scanned_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    transitive_results: list[ScanResult] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_max_severity_consistent(self) -> ScanResult:
@@ -223,6 +230,10 @@ class ScanResult(BaseModel):
                     f"{f.rule_id} severity {f.severity}"
                 )
         return self
+
+
+# Required for the self-referential ScanResult.transitive_results field.
+ScanResult.model_rebuild()
 
 
 class FileScanResult(BaseModel):

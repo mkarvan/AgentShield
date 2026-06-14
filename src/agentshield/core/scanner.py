@@ -109,6 +109,8 @@ class AgentShield:
         # Cache lookup
         cached = await self.cache.get(request)
         if cached is not None:
+            if request.transitive:
+                cached = await self._add_transitive_results(request, cached)
             return cached
 
         # Run checks (online or offline depending on config)
@@ -154,7 +156,50 @@ class AgentShield:
                 reason=decision.reason,
             )
 
+        if request.transitive:
+            result = await self._add_transitive_results(request, result)
+
         return result
+
+    async def _add_transitive_results(
+        self, request: ScanRequest, primary: ScanResult
+    ) -> ScanResult:
+        """Resolve and scan all transitive deps of *request*, attach to *primary*."""
+        from agentshield.core.deps import DepSpec, resolve_deps
+
+        deps = await resolve_deps(
+            request.package,
+            request.version,
+            request.ecosystem,
+            max_depth=request.transitive_depth,
+        )
+        if not deps:
+            return primary
+
+        _TRANSITIVE_CONCURRENCY = 10
+        sem = asyncio.Semaphore(_TRANSITIVE_CONCURRENCY)
+
+        async def _scan_dep(dep: DepSpec) -> ScanResult:
+            async with sem:
+                dep_req = ScanRequest(
+                    package=dep.package,
+                    version=None,
+                    ecosystem=dep.ecosystem,
+                    source=request.source,
+                    transitive=False,  # never recurse into transitive deps
+                )
+                return await self.ascan(dep_req)
+
+        raw = await asyncio.gather(*[_scan_dep(d) for d in deps], return_exceptions=True)
+
+        transitive_results: list[ScanResult] = []
+        for i, r in enumerate(raw):
+            if isinstance(r, ScanResult):
+                transitive_results.append(r)
+            elif isinstance(r, Exception):
+                logger.warning("Transitive scan failed for '%s': %s", deps[i].package, r)
+
+        return primary.model_copy(update={"transitive_results": transitive_results})
 
     async def _run_checks(self, request: ScanRequest) -> list[Finding]:
         """Full online enrichment: OSV + NVD + GitHub Advisory + typosquatting + malicious DB."""

@@ -40,6 +40,12 @@ def scan(
         False, "--deep", help="Run static analysis in addition to CVE lookups"
     ),
     offline: bool = typer.Option(False, "--offline", help="Use only local DB — no network calls"),
+    transitive: bool = typer.Option(
+        False, "--transitive", "-T", help="Resolve and scan transitive dependencies"
+    ),
+    transitive_depth: int = typer.Option(
+        3, "--transitive-depth", help="Maximum depth for transitive dependency resolution (1-10)"
+    ),
 ) -> None:
     """Scan a package for security vulnerabilities."""
     name, _, version = package.partition("==")
@@ -49,6 +55,8 @@ def scan(
         ecosystem=ecosystem,
         source="cli",
         deep=deep,
+        transitive=transitive,
+        transitive_depth=transitive_depth,
     )
 
     from agentshield.core.config import Config
@@ -442,6 +450,45 @@ def _print_file_result(result: FileScanResult) -> None:
     console.print(table)
 
 
+def _print_transitive_results(results: list[ScanResult]) -> None:
+    """Show a summary table for transitive dependency scan results."""
+    console.print(f"\n[bold]Transitive Dependencies[/bold] ({len(results)} scanned)\n")
+
+    table = Table(title="Transitive Dependency Scan", show_header=True)
+    table.add_column("Package", style="bold")
+    table.add_column("Ecosystem", style="dim")
+    table.add_column("Status")
+    table.add_column("Max Severity")
+    table.add_column("Findings", justify="right", style="dim")
+
+    for r in results:
+        a = r.decision.action
+        sev = r.max_severity.value
+        status_color = {
+            DecisionAction.ALLOW: "green",
+            DecisionAction.LOG_ASYNC: "cyan",
+            DecisionAction.NEEDS_CONFIRMATION: "yellow",
+            DecisionAction.BLOCK: "red",
+        }.get(a, "white")
+        sev_color = {
+            "CRITICAL": "red",
+            "HIGH": "orange3",
+            "MEDIUM": "yellow",
+            "LOW": "cyan",
+            "INFO": "dim",
+            "NONE": "dim",
+        }.get(sev, "white")
+        table.add_row(
+            r.request.package,
+            r.request.ecosystem.value,
+            f"[{status_color}]{a.value}[/{status_color}]",
+            f"[{sev_color}]{sev}[/{sev_color}]",
+            str(len(r.findings)),
+        )
+
+    console.print(table)
+
+
 def _print_result(result: ScanResult, wall_ms: int | None = None) -> None:
     action = result.decision.action
     color = {
@@ -488,6 +535,9 @@ def _print_result(result: ScanResult, wall_ms: int | None = None) -> None:
         console.print(table)
     else:
         console.print("  [dim]No findings.[/dim]")
+
+    if result.transitive_results:
+        _print_transitive_results(result.transitive_results)
 
 
 if __name__ == "__main__":

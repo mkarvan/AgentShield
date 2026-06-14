@@ -55,6 +55,16 @@ _TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Brief explanation of why the agent wants this package.",
                 },
+                "transitive": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Resolve and scan all transitive dependencies.",
+                },
+                "transitive_depth": {
+                    "type": "integer",
+                    "default": 3,
+                    "description": "Maximum depth for transitive dependency resolution (1–10).",
+                },
             },
             "required": ["package", "ecosystem"],
         },
@@ -189,10 +199,12 @@ class MCPServer:
                 deep=bool(args.get("deep", False)),
                 context_hint=args.get("context_hint"),
                 source="mcp",
+                transitive=bool(args.get("transitive", False)),
+                transitive_depth=int(args.get("transitive_depth", 3)),
             )
             result = await self.shield.ascan(request)
 
-            payload = {
+            payload: dict[str, Any] = {
                 "decision": result.decision.action.value,
                 "reason": result.decision.reason,
                 "max_severity": result.max_severity.value,
@@ -208,6 +220,16 @@ class MCPServer:
                         "remediation": f.remediation,
                     }
                     for f in result.findings
+                ],
+                "transitive_results": [
+                    {
+                        "package": tr.request.package,
+                        "ecosystem": tr.request.ecosystem.value,
+                        "decision": tr.decision.action.value,
+                        "max_severity": tr.max_severity.value,
+                        "findings_count": len(tr.findings),
+                    }
+                    for tr in result.transitive_results
                 ],
             }
             return {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}

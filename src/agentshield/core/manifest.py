@@ -30,11 +30,36 @@ _FILENAME_TO_FORMAT: dict[str, str] = {
 
 def detect_format(path: Path) -> str:
     """Return a format key for *path*, or raise ValueError if unrecognized."""
-    fmt = _FILENAME_TO_FORMAT.get(path.name.lower())
-    if fmt is None:
-        supported = ", ".join(_FILENAME_TO_FORMAT)
-        raise ValueError(f"Unrecognized manifest filename: {path.name!r}. Supported: {supported}")
-    return fmt
+    name_lower = path.name.lower()
+
+    # Exact filename match
+    fmt = _FILENAME_TO_FORMAT.get(name_lower)
+    if fmt is not None:
+        return fmt
+
+    # Requirements variants: e.g. test-requirements.txt, requirements-dev.txt
+    if name_lower.endswith("requirements.txt") or (
+        "requirements" in name_lower and name_lower.endswith(".txt")
+    ):
+        return "requirements_txt"
+
+    # Extension-based fallback; .json uses content sniffing to distinguish lockfile
+    suffix = path.suffix.lower()
+    if suffix == ".txt":
+        return "requirements_txt"
+    if suffix == ".json":
+        try:
+            data = json.loads(path.read_text())
+            if isinstance(data, dict) and "lockfileVersion" in data:
+                return "package_lock_json"
+        except (json.JSONDecodeError, OSError):
+            pass
+        return "package_json"
+    if suffix == ".toml":
+        return "cargo_toml"
+
+    supported = ", ".join(_FILENAME_TO_FORMAT)
+    raise ValueError(f"Unrecognized manifest filename: {path.name!r}. Supported: {supported}")
 
 
 def parse_requirements_txt(path: Path) -> list[ScanRequest]:

@@ -51,6 +51,62 @@ def test_detect_format_unknown_raises(tmp_path: Path) -> None:
         detect_format(p)
 
 
+def test_detect_format_test_requirements_txt(tmp_path: Path) -> None:
+    p = tmp_path / "test-requirements.txt"
+    p.write_text("")
+    assert detect_format(p) == "requirements_txt"
+
+
+def test_detect_format_dev_requirements_txt(tmp_path: Path) -> None:
+    p = tmp_path / "dev-requirements.txt"
+    p.write_text("")
+    assert detect_format(p) == "requirements_txt"
+
+
+def test_detect_format_requirements_dev_txt(tmp_path: Path) -> None:
+    p = tmp_path / "requirements-dev.txt"
+    p.write_text("")
+    assert detect_format(p) == "requirements_txt"
+
+
+def test_detect_format_requirements_ci_txt(tmp_path: Path) -> None:
+    p = tmp_path / "requirements-ci.txt"
+    p.write_text("")
+    assert detect_format(p) == "requirements_txt"
+
+
+def test_detect_format_unknown_txt_falls_back_to_requirements(tmp_path: Path) -> None:
+    p = tmp_path / "deps.txt"
+    p.write_text("")
+    assert detect_format(p) == "requirements_txt"
+
+
+def test_detect_format_unknown_json_infers_package_json(tmp_path: Path) -> None:
+    p = tmp_path / "my-packages.json"
+    p.write_text('{"dependencies": {}}')
+    assert detect_format(p) == "package_json"
+
+
+def test_detect_format_unknown_json_infers_package_lock(tmp_path: Path) -> None:
+    p = tmp_path / "my-lock.json"
+    p.write_text('{"lockfileVersion": 2, "packages": {}}')
+    assert detect_format(p) == "package_lock_json"
+
+
+def test_detect_format_unknown_json_invalid_content_falls_back_to_package_json(
+    tmp_path: Path,
+) -> None:
+    p = tmp_path / "weird.json"
+    p.write_text("not valid json")
+    assert detect_format(p) == "package_json"
+
+
+def test_detect_format_unknown_toml_infers_cargo(tmp_path: Path) -> None:
+    p = tmp_path / "my-manifest.toml"
+    p.write_text("")
+    assert detect_format(p) == "cargo_toml"
+
+
 # ── parse_requirements_txt ───────────────────────────────────────────────────
 
 
@@ -358,3 +414,22 @@ def test_parse_manifest_unknown_raises(tmp_path: Path) -> None:
     p.write_text("")
     with pytest.raises(ValueError):
         parse_manifest(p)
+
+
+def test_parse_manifest_test_requirements_txt(tmp_path: Path) -> None:
+    p = tmp_path / "test-requirements.txt"
+    p.write_text("pytest==7.4.0\n")
+    reqs = parse_manifest(p)
+    assert len(reqs) == 1
+    assert reqs[0].package == "pytest"
+    assert reqs[0].version == "7.4.0"
+    assert reqs[0].ecosystem == Ecosystem.PYPI
+
+
+def test_parse_manifest_requirements_dev_txt(tmp_path: Path) -> None:
+    p = tmp_path / "requirements-dev.txt"
+    p.write_text("black==23.0.0\n")
+    reqs = parse_manifest(p)
+    assert len(reqs) == 1
+    assert reqs[0].package == "black"
+    assert reqs[0].ecosystem == Ecosystem.PYPI

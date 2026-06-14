@@ -71,9 +71,10 @@ def get_peer_uid(writer: asyncio.StreamWriter) -> int | None:
     try:
         if sys.platform == "linux":
             # struct ucred { __u32 pid; __u32 uid; __u32 gid; }
+            so_peercred = getattr(_socket, "SO_PEERCRED", 17)  # 17 on Linux
             raw = sock.getsockopt(
                 _socket.SOL_SOCKET,
-                _socket.SO_PEERCRED,  # type: ignore[attr-defined]
+                so_peercred,
                 struct.calcsize("3I"),
             )
             _, uid, _ = struct.unpack("3I", raw)

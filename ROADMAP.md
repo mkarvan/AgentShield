@@ -1,6 +1,6 @@
 # AgentShield Roadmap
 
-## v0.1.0 (current)
+## v0.1.0
 
 Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosquatting detection, malicious package database, prompt injection heuristics, and optional deep static analysis. Integrations: Hermes plugin, MCP server, CLI, shell wrappers.
 
@@ -12,36 +12,49 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - Uniform HTTP error handling across all DB clients
 - NVD false positive filtering via word-boundary matching and CPE configuration validation
 
-## v0.2.0 — Planned
+## v0.2.0 (done)
 
-### Dependency & lockfile scanning
+### Dependency & lockfile scanning (done)
 
 - `scan_file("requirements.txt")` / `scan_file("package.json")` mode — scan all packages in a manifest at once
-- Transitive dependency scanning — resolve and scan the full dependency tree, not just the top-level package
-- SBOM generation and lockfile auditing
+- Transitive dependency scanning — resolve and scan the full dependency tree via PyPI, npm, and crates.io APIs
+- `--transitive` / `-T` CLI flag and `transitive_depth` parameter (default depth 3)
 
-### Performance
+### Performance (done)
 
-- Concurrent batch warm-up for `malicious_db._fetch_malicious_from_osv()` — currently sequential HTTP per package; use `asyncio.gather` with semaphore
-- Pre-normalize malicious package list at load time — currently lowercases on every `check()` call; pre-build a `set` for O(1) lookup
-- `_SEVERITY_ORDER` as int mapping — `_max_severity()` currently does linear `.index()` on every call
+- Concurrent batch warm-up for `malicious_db._fetch_malicious_from_osv()` — `asyncio.gather` with `Semaphore(5)`
+- Pre-normalized malicious package list as `frozenset[str]` for O(1) lookup
+- `_SEVERITY_RANK` as int mapping — O(1) severity comparison
 
-### Integration completeness
+### Integration completeness (done)
 
-- `agentshield_posture` MCP endpoint — currently returns "not yet implemented"
+- `agentshield_posture` MCP endpoint — wired to real `run_posture_check()` with `tool_names`, `log_hours`, `skip_packages` parameters
+- `agentshield_scan_file` MCP endpoint — scan manifest files via MCP
+
+### Testing gaps (done)
+
+- `wheel_extractor` broader extraction scenarios (9 new tests: multi-file wheel, corrupted archive, sdist extraction, zip-format sdist, unknown format, end-to-end download paths)
+- GitHub Advisory client standalone tests (8 new tests: Cargo ecosystem, rate-limit handling, malformed responses, missing fields, severity defaults, reference filtering)
+- IPC server tests (17 new tests: dispatch-level ping/scan/error handling, real Unix socket lifecycle, malformed JSON, multi-request connections, graceful disconnect)
+
+## v0.3.0 — Planned
+
+### Integration
+
 - Claude Code integration — currently a stub `__init__.py`
-- IPC socket authentication — no auth on the Unix domain socket; add peer-credential validation or document the limitation
+- IPC socket authentication — add peer-credential validation or document the limitation
 
-### Testing gaps
+### Data & analysis
 
-- `wheel_extractor` test coverage (zip-slip tests added in v0.1.1, but broader extraction scenarios needed)
-- GitHub Advisory client standalone tests
-- IPC server tests
+- SBOM generation and lockfile auditing
+- Curated malicious package list expansion — current list is static and incomplete
 
-### Other
+### Code quality
 
 - `prompt_injection.py` is sync while everything else is async — align the interface
 - Clarify `DecisionAction.NEEDS_CONFIRMATION` vs `WARN_CONFIRM` distinction in docs
-- PyPI publishing (blocked by name conflict — `agentshield` taken by another maintainer)
-- Curated malicious package list expansion — current list is static and incomplete
 - `--deep` mode supply chain risk documentation — downloading packages for analysis has inherent risk
+
+### Distribution
+
+- PyPI publishing (blocked by name conflict — `agentshield` taken by another maintainer)

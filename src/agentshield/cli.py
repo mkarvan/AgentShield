@@ -18,6 +18,7 @@ from rich.progress import (
 from rich.table import Table
 
 from agentshield.core.models import (
+    Decision,
     DecisionAction,
     Ecosystem,
     FileScanResult,
@@ -678,10 +679,12 @@ def guard_scan_cmd(
     Exits 0 if safe, 1 if any package is blocked.
     """
     import shlex
+    from pathlib import Path
 
     from agentshield.core.config import Config
     from agentshield.integrations.hermes.plugin import (
         _find_shell_suspicions,
+        _parse_shell_manifests,
         _parse_shell_packages,
     )
 
@@ -690,7 +693,8 @@ def guard_scan_cmd(
     cfg = Config.load(config)
     shield = AgentShield(config=cfg)
 
-    suspicions = _find_shell_suspicions(command)
+    manifest_paths, manifest_suspicions = _parse_shell_manifests(command)
+    suspicions = _find_shell_suspicions(command) + manifest_suspicions
     if suspicions:
         err_console.print("[red]AgentShield: cannot verify package source:[/red]")
         for s in suspicions:
@@ -698,41 +702,49 @@ def guard_scan_cmd(
         raise typer.Exit(code=1)
 
     pkg_list = _parse_shell_packages(command)
-    if not pkg_list:
+    if not pkg_list and not manifest_paths:
         return  # no packages detected, allow
 
     requests_list = [
         ScanRequest(package=pkg, ecosystem=eco, source="guard") for pkg, eco in pkg_list
     ]
 
-    async def _run() -> list[ScanResult]:
-        results = []
+    # (label, decision) pairs covering both named packages and manifest files.
+    async def _run() -> list[tuple[str, Decision]]:
+        results: list[tuple[str, Decision]] = []
         for req in requests_list:
-            results.append(await shield.ascan(req))
+            res = await shield.ascan(req)
+            results.append((req.package, res.decision))
+        for manifest in manifest_paths:
+            manifest_path = Path(manifest)
+            if not manifest_path.exists():
+                continue
+            file_res = await shield.ascan_file(manifest_path)
+            results.append((manifest, file_res.aggregate_decision))
         return results
 
     results = asyncio.run(_run())
 
-    blocked = [r for r in results if r.decision.action == DecisionAction.BLOCK]
+    blocked = [(label, d) for label, d in results if d.action == DecisionAction.BLOCK]
     warned = [
-        r
-        for r in results
-        if r.decision.action in (DecisionAction.NEEDS_CONFIRMATION, DecisionAction.LOG_ASYNC)
+        (label, d)
+        for label, d in results
+        if d.action in (DecisionAction.NEEDS_CONFIRMATION, DecisionAction.LOG_ASYNC)
     ]
 
     if warned:
         console.print(
-            f"[yellow]AgentShield: {len(warned)} package(s) flagged for review[/yellow]",
+            f"[yellow]AgentShield: {len(warned)} item(s) flagged for review[/yellow]",
         )
-        for r in warned:
-            console.print(f"  • {r.request.package}: {r.decision.reason}")
+        for label, d in warned:
+            console.print(f"  • {label}: {d.reason}")
 
     if blocked:
         console.print(
-            f"[red]AgentShield BLOCKED {len(blocked)} package(s):[/red]",
+            f"[red]AgentShield BLOCKED {len(blocked)} item(s):[/red]",
         )
-        for r in blocked:
-            console.print(f"  • {r.request.package}: {r.decision.reason}")
+        for label, d in blocked:
+            console.print(f"  • {label}: {d.reason}")
         raise typer.Exit(code=1)
 
 

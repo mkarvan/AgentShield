@@ -1126,7 +1126,7 @@ Exit code: `0` = no drift, `1` = one or more packages have regressed.
 
 ## Rate limits
 
-AgentShield tracks per-session package installation rates and cumulative wheel download size. Limits are enforced before online checks run — if a limit is exceeded, the scan returns a BLOCK decision with a R1.1 Finding (severity HIGH) immediately.
+AgentShield tracks per-session package installation rates and cumulative wheel download size. Limits are enforced before online checks run — if a limit is exceeded, the scan returns a BLOCK decision with a R1.1 Finding (severity HIGH) immediately. Cumulative wheel size is accrued from `--deep` scans (which download the artifact) and each download is also capped at `max_wheel_mb_per_session` individually; a session already over budget is blocked on its next scan.
 
 ### Configuration
 
@@ -1258,7 +1258,7 @@ All responses are JSON. Errors return `{"error": "..."}` with the appropriate HT
 | Env var | `AGENTSHIELD_ALLOWED_DIRS=/path/a:/path/b` (colon-separated) |
 | Python API | Pass `allowed_dirs=[Path("/path/a")]` to the `HTTPServer` constructor |
 
-The HTTP server uses Python's asyncio stdlib — no extra dependencies required.
+The HTTP server uses Python's asyncio stdlib — no extra dependencies required. It binds to `127.0.0.1` and has **no authentication**, so it must not be exposed to untrusted networks (binding to a non-loopback host logs a warning). Request bodies larger than 10 MB are rejected with **413 Payload Too Large**.
 
 ---
 
@@ -1271,7 +1271,7 @@ agentshield guard              # wraps $SHELL (bash, zsh, or fish)
 agentshield guard --shell zsh  # wrap a specific shell
 ```
 
-Inside the guarded shell, the package manager commands are shadowed by wrapper functions. Any `pip install`, `npm install`, or `cargo add`/`cargo install` calls `agentshield guard-scan-cmd` first — if AgentShield blocks the package, the install is aborted and the error is printed before the command runs.
+Inside the guarded shell, the package manager commands are shadowed by wrapper functions. Any `pip install`, `npm install`, or `cargo add`/`cargo install` calls `agentshield guard-scan-cmd` first — if AgentShield blocks the package, the install is aborted and the error is printed before the command runs. Packages declared in a referenced requirements/constraint file (`pip install -r requirements.txt`) are resolved and scanned as well; a remote `-r <url>` is blocked because its contents cannot be verified.
 
 ```
 [AgentShield Guard] Active — pip, npm, and cargo install commands are protected.

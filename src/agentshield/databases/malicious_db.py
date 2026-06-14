@@ -69,6 +69,8 @@ class MaliciousDB:
 
     def _get_curated_lower(self) -> dict[str, frozenset[str]]:
         if self._curated_lower is None:
+            # _get_curated() populates _curated_lower on a fresh load; rebuild
+            # here for the case where _curated was set externally (e.g. tests).
             curated = self._get_curated()
             if self._curated_lower is None:
                 self._curated_lower = {

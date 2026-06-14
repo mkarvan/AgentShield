@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -183,6 +184,49 @@ def test_write_response_400() -> None:
     HTTPServer._write_response(writer, 400, {"error": "bad"})
     response = b"".join(written).decode()
     assert "400 Bad Request" in response
+
+
+# ── request body size limit ───────────────────────────────────────────────────
+
+
+async def test_oversized_content_length_returns_413() -> None:
+    server = HTTPServer(MagicMock())
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"POST /scan HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n")
+    reader.feed_eof()
+
+    written: list[bytes] = []
+    writer = MagicMock()
+    writer.write = lambda data: written.append(data)
+    writer.drain = AsyncMock()
+    writer.close = MagicMock()
+
+    await server._handle_connection(reader, writer)
+
+    response = b"".join(written).decode()
+    assert "413 Payload Too Large" in response
+
+
+async def test_body_within_limit_is_processed() -> None:
+    server = HTTPServer(_make_shield(scan_result=_allow_result()))
+    body = json.dumps({"package": "requests", "ecosystem": "pypi"}).encode()
+    request = (
+        b"POST /scan HTTP/1.1\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+    )
+    reader = asyncio.StreamReader()
+    reader.feed_data(request)
+    reader.feed_eof()
+
+    written: list[bytes] = []
+    writer = MagicMock()
+    writer.write = lambda data: written.append(data)
+    writer.drain = AsyncMock()
+    writer.close = MagicMock()
+
+    await server._handle_connection(reader, writer)
+
+    response = b"".join(written).decode()
+    assert "200 OK" in response
 
 
 # ── scanner error propagation ─────────────────────────────────────────────────

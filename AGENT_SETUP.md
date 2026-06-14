@@ -265,7 +265,7 @@ Hermes sometimes uses raw bash commands instead of structured install tools (e.g
 | `yarn add …` | npm |
 | `cargo add …`, `cargo install …` | Cargo |
 
-Flags like `--break-system-packages`, `--user`, `-U`, and value-taking flags like `-r requirements.txt` are correctly handled (stripped during parsing). Version specifiers and extras (`requests[security]==2.28.0`) are stripped to extract the bare package name.
+Flags like `--break-system-packages`, `--user`, and `-U` are correctly handled. Packages declared in a referenced requirements/constraint file (`-r requirements.txt`, `-c constraints.txt`) are resolved and scanned too; a remote reference such as `-r https://…/req.txt` is blocked because its contents cannot be verified statically. Version specifiers and extras (`requests[security]==2.28.0`) are stripped to extract the bare package name.
 
 If Hermes uses a different tool name for shell execution, add it to the `intercepts` list by subclassing:
 

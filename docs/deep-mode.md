@@ -44,8 +44,12 @@ attacker could observe.
 ### 3. Resource exhaustion
 
 A zip bomb or deeply-nested archive could exhaust disk space or CPU during
-extraction.  AgentShield limits extraction to a temporary directory and catches
-`OSError` during expansion, but does not enforce a hard disk-quota limit.
+extraction.  Each download is capped at `max_wheel_mb_per_session` (default
+500 MB) and aborts mid-stream once the cap is exceeded, and the cumulative
+per-session total is enforced by the rate limiter.  Extraction runs in a
+temporary directory and catches `OSError`, but the *decompressed* size is not
+yet bounded — a high-ratio archive within the download cap could still expand
+significantly.
 
 ## Mitigations built into AgentShield
 
@@ -55,6 +59,7 @@ extraction.  AgentShield limits extraction to a temporary directory and catches
 | `setup.py` execution | Downloads use `--no-deps --no-build-isolation`; sdist extraction skips `setup.py` |
 | Symlink escape | Symlinks outside the target directory are rejected |
 | Malicious `tar` entries | Python 3.12 `filter="data"` or manual tar-slip guard on 3.11 |
+| Oversized download | Download capped at `max_wheel_mb_per_session` (aborts mid-stream); per-session total enforced by the rate limiter |
 
 ## Recommended additional mitigations
 

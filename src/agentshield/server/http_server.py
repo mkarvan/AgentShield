@@ -29,8 +29,15 @@ _STATUS_TEXT = {
     400: "Bad Request",
     403: "Forbidden",
     404: "Not Found",
+    413: "Payload Too Large",
     500: "Internal Server Error",
 }
+
+# Reject request bodies larger than this to avoid unbounded buffering.
+_MAX_BODY_BYTES = 10 * 1024 * 1024
+
+# Hosts that keep the server private to the local machine.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 class HTTPServer:
@@ -69,6 +76,12 @@ class HTTPServer:
 
     async def start(self) -> None:
         """Start the server and serve requests until cancelled."""
+        if self.host not in _LOOPBACK_HOSTS:
+            logger.warning(
+                "AgentShield HTTP server bound to non-loopback host %r — it has no "
+                "authentication and must not be exposed to untrusted networks.",
+                self.host,
+            )
         server = await asyncio.start_server(self._handle_connection, self.host, self.port)
         addr = server.sockets[0].getsockname()
         logger.info("AgentShield HTTP server listening on http://%s:%s", addr[0], addr[1])
@@ -101,6 +114,14 @@ class HTTPServer:
                     headers[k.lower().strip()] = v.strip()
 
             content_length = int(headers.get("content-length", "0") or "0")
+            if content_length > _MAX_BODY_BYTES:
+                self._write_response(
+                    writer,
+                    413,
+                    {"error": f"Request body exceeds {_MAX_BODY_BYTES} bytes"},
+                )
+                await writer.drain()
+                return
             body = b""
             if content_length > 0:
                 body = await reader.readexactly(content_length)

@@ -13,6 +13,7 @@ from httpx import Response
 
 from agentshield.analyzers.wheel_extractor import (
     WheelExtractionError,
+    _download,
     _extract_sdist,
     _extract_wheel,
     _safe_zipfile_extract,
@@ -287,6 +288,61 @@ async def test_extracted_package_downloads_and_extracts_sdist() -> None:
     async with extracted_package(request) as pkg_dir:
         assert pkg_dir.is_dir()
         assert (pkg_dir / "synth-sdist-1.0.0" / "setup.py").exists()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_download_returns_byte_count() -> None:
+    dl_url = f"{_DL_BASE}/payload.bin"
+    respx.get(dl_url).mock(return_value=Response(200, content=b"x" * 4096))
+    dest = Path(__import__("tempfile").mkstemp()[1])
+    written = await _download(dl_url, dest)
+    assert written == 4096
+    assert dest.read_bytes() == b"x" * 4096
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_download_enforces_max_bytes() -> None:
+    dl_url = f"{_DL_BASE}/toobig.bin"
+    respx.get(dl_url).mock(return_value=Response(200, content=b"x" * (200 * 1024)))
+    dest = Path(__import__("tempfile").mkstemp()[1])
+    with pytest.raises(WheelExtractionError, match="exceeds the maximum allowed size"):
+        await _download(dl_url, dest, max_bytes=64 * 1024)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extracted_package_reports_bytes_to_callback() -> None:
+    wheel_bytes = _make_zip_bytes({"synth/__init__.py": b""})
+    dl_url = f"{_DL_BASE}/synth_pkg-1.0.0-py3-none-any.whl"
+    respx.get(_PYPI_JSON.format(pkg="synth-pkg", ver="1.0.0")).mock(
+        return_value=Response(
+            200,
+            json={
+                "info": {"version": "1.0.0"},
+                "urls": [
+                    {
+                        "filename": "synth_pkg-1.0.0-py3-none-any.whl",
+                        "packagetype": "bdist_wheel",
+                        "url": dl_url,
+                    }
+                ],
+            },
+        )
+    )
+    respx.get(dl_url).mock(return_value=Response(200, content=wheel_bytes))
+
+    recorded: list[int] = []
+
+    async def _record(n: int) -> None:
+        recorded.append(n)
+
+    request = ScanRequest(package="synth-pkg", version="1.0.0", ecosystem=Ecosystem.PYPI)
+    async with extracted_package(request, on_download=_record) as pkg_dir:
+        assert pkg_dir.is_dir()
+
+    assert recorded == [len(wheel_bytes)]
 
 
 @pytest.mark.asyncio

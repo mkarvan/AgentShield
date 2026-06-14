@@ -185,6 +185,26 @@ async def test_cache_add_malicious_bulk(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_cache_add_malicious_bulk_counts_only_new_rows(tmp_path: Path):
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import CacheConfig
+
+    cache = ScanCache(CacheConfig(db_path=tmp_path / "test.db"))
+    rows = [("pkg-a", "pypi", "r", "t"), ("pkg-b", "pypi", "r", "t")]
+
+    assert await cache.add_malicious_packages_bulk(rows) == 2
+    # Re-inserting the same rows: INSERT OR IGNORE skips them, so count is 0.
+    assert await cache.add_malicious_packages_bulk(rows) == 0
+    # A mix of one existing and one new row counts only the new one.
+    assert (
+        await cache.add_malicious_packages_bulk(
+            [("pkg-a", "pypi", "r", "t"), ("pkg-c", "pypi", "r", "t")]
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_cache_add_malicious_ignore_duplicates(tmp_path: Path):
     from agentshield.core.cache import ScanCache
     from agentshield.core.config import CacheConfig

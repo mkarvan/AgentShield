@@ -12,7 +12,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -59,7 +59,13 @@ async def _resolve_pypi_url(package: str, version: str | None) -> str:
     return str(candidates[0]["url"])
 
 
-async def _download(url: str, dest: Path) -> None:
+async def _download(url: str, dest: Path, *, max_bytes: int | None = None) -> int:
+    """Stream *url* to *dest*; return the number of bytes written.
+
+    Raises WheelExtractionError if the download exceeds *max_bytes*, guarding
+    against oversized-artifact / decompression-bomb DoS during ``--deep`` scans.
+    """
+    total = 0
     async with (
         httpx.AsyncClient(timeout=60, follow_redirects=True) as client,
         client.stream("GET", url) as resp,
@@ -67,7 +73,13 @@ async def _download(url: str, dest: Path) -> None:
         resp.raise_for_status()
         with open(dest, "wb") as fh:
             async for chunk in resp.aiter_bytes(65536):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise WheelExtractionError(
+                        f"Download exceeds the maximum allowed size of {max_bytes} bytes"
+                    )
                 fh.write(chunk)
+    return total
 
 
 def _safe_zipfile_extract(zf: zipfile.ZipFile, extract_to: Path) -> None:
@@ -123,8 +135,19 @@ def _extract_sdist(sdist_path: Path, extract_to: Path) -> None:
 
 
 @asynccontextmanager
-async def extracted_package(request: ScanRequest) -> AsyncIterator[Path]:
-    """Async context manager: downloads and extracts the package, yields the directory path."""
+async def extracted_package(
+    request: ScanRequest,
+    *,
+    max_bytes: int | None = None,
+    on_download: Callable[[int], Awaitable[None]] | None = None,
+) -> AsyncIterator[Path]:
+    """Async context manager: downloads and extracts the package, yields the directory path.
+
+    *max_bytes* caps the download size (guards against oversized artifacts).
+    *on_download*, if given, is awaited with the number of bytes downloaded so
+    the caller can account for session bandwidth (see
+    :meth:`RateLimiter.record_wheel_bytes`).
+    """
     if request.ecosystem != Ecosystem.PYPI:
         raise WheelExtractionError(
             f"Wheel extraction only supports PyPI; got ecosystem={request.ecosystem}"
@@ -140,7 +163,9 @@ async def extracted_package(request: ScanRequest) -> AsyncIterator[Path]:
         extract_dir.mkdir()
 
         logger.debug("Downloading %s → %s", url, archive)
-        await _download(url, archive)
+        downloaded = await _download(url, archive, max_bytes=max_bytes)
+        if on_download is not None:
+            await on_download(downloaded)
 
         if filename.endswith(".whl"):
             _extract_wheel(archive, extract_dir)

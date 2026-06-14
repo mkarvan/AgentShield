@@ -119,6 +119,38 @@ def test_wheel_size_finding_mentions_mb_limit(tmp_db: Path) -> None:
     assert "10" in findings[0].title or "MB" in findings[0].title
 
 
+# ── record_wheel_bytes (post-download accounting) ──────────────────────────
+
+
+def test_record_wheel_bytes_accumulates_into_session_total(tmp_db: Path) -> None:
+    rl = _rl(tmp_db, max_mb=10)
+    # Simulate two --deep downloads totalling 12 MB (over the 10 MB budget).
+    asyncio.run(rl.record_wheel_bytes(7 * 1024 * 1024))
+    asyncio.run(rl.record_wheel_bytes(5 * 1024 * 1024))
+
+    # The next check() (no bytes of its own) must see the session is over budget.
+    findings = asyncio.run(rl.check("nextpkg"))
+    rule_ids = [f.rule_id for f in findings]
+    assert "R1.1" in rule_ids
+    assert any("MB" in f.title for f in findings if f.rule_id == "R1.1")
+
+
+def test_record_wheel_bytes_does_not_count_a_package(tmp_db: Path) -> None:
+    rl = _rl(tmp_db, max_pkg=2, max_mb=1000)
+    asyncio.run(rl.record_wheel_bytes(1024))
+    # Recording bytes must not consume the package-count budget.
+    assert asyncio.run(rl.check("a")) == []
+    assert asyncio.run(rl.check("b")) == []
+
+
+def test_record_wheel_bytes_ignores_nonpositive(tmp_db: Path) -> None:
+    rl = _rl(tmp_db, max_mb=10)
+    asyncio.run(rl.record_wheel_bytes(0))
+    asyncio.run(rl.record_wheel_bytes(-100))
+    # Nothing recorded → a normal small package still passes.
+    assert asyncio.run(rl.check("clean")) == []
+
+
 # ── window reset ──────────────────────────────────────────────────────────
 
 

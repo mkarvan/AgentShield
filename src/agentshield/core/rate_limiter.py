@@ -11,6 +11,7 @@ import os
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from agentshield.core.config import RateLimitsConfig
 from agentshield.core.models import Finding, Severity
@@ -26,6 +27,17 @@ def _session_id() -> str:
         sid = str(uuid.uuid4())
         os.environ[_SESSION_ENV] = sid
     return sid
+
+
+def _resolve_counters(state: dict[str, Any] | None, now: int) -> tuple[int, int, int]:
+    """Return ``(package_count, total_bytes, window_start)`` for *state*.
+
+    Counters reset (and the window restarts at *now*) when there is no prior
+    state or the previous 1-hour window has elapsed.
+    """
+    if state is None or state["window_start"] < now - _HOUR:
+        return 0, 0, now
+    return state["package_count"], state["total_bytes"], state["window_start"]
 
 
 class RateLimiter:
@@ -47,22 +59,7 @@ class RateLimiter:
         cache = ScanCache(CacheConfig(db_path=self._db_path))
 
         state = await cache.get_session_state(sid)
-
-        if state is None:
-            # Brand-new session
-            pkg_count = 0
-            total_bytes = 0
-            window_start = now
-        else:
-            # Reset counters if the 1-hour window has elapsed
-            if state["window_start"] < now - _HOUR:
-                pkg_count = 0
-                total_bytes = 0
-                window_start = now
-            else:
-                pkg_count = state["package_count"]
-                total_bytes = state["total_bytes"]
-                window_start = state["window_start"]
+        pkg_count, total_bytes, window_start = _resolve_counters(state, now)
 
         findings: list[Finding] = []
 
@@ -123,3 +120,31 @@ class RateLimiter:
             )
 
         return findings
+
+    async def record_wheel_bytes(self, wheel_bytes: int) -> None:
+        """Add *wheel_bytes* downloaded during a --deep scan to the session total.
+
+        Wheel sizes are only known after the artifact is downloaded, so they are
+        recorded here rather than in :meth:`check`. A session that has already
+        exceeded ``max_wheel_mb_per_session`` is then blocked by the next
+        :meth:`check` call. Does not increment the package counter.
+        """
+        if wheel_bytes <= 0:
+            return
+
+        from agentshield.core.cache import ScanCache
+        from agentshield.core.config import CacheConfig
+
+        sid = _session_id()
+        now = int(time.time())
+        cache = ScanCache(CacheConfig(db_path=self._db_path))
+
+        state = await cache.get_session_state(sid)
+        pkg_count, total_bytes, window_start = _resolve_counters(state, now)
+
+        await cache.upsert_session_state(
+            session_id=sid,
+            package_count=pkg_count,
+            total_bytes=total_bytes + wheel_bytes,
+            window_start=window_start,
+        )

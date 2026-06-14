@@ -269,17 +269,23 @@ class ScanCache:
     async def add_malicious_packages_bulk(
         self, rows: list[tuple[str, str, str | None, str | None]]
     ) -> int:
-        """Bulk-insert (package, ecosystem, reason, source) tuples. Returns inserted count."""
+        """Bulk-insert (package, ecosystem, reason, source) tuples.
+
+        Returns the number of rows actually inserted; duplicates skipped by
+        ``INSERT OR IGNORE`` are not counted.
+        """
         now = int(time.time())
         records = [(p.lower(), e.lower(), r, s, now) for p, e, r, s in rows]
         async with aiosqlite.connect(self.config.db_path) as db:
             await self._ensure_schema(db)
+            before = db.total_changes
             await db.executemany(
                 "INSERT OR IGNORE INTO malicious_packages (package, ecosystem, reason, source, added_at) VALUES (?,?,?,?,?)",
                 records,
             )
             await db.commit()
-        return len(records)
+            inserted = db.total_changes - before
+        return inserted
 
     async def is_malicious(self, package: str, ecosystem: str) -> dict[str, Any] | None:
         """Return the malicious_packages row if the package is known-malicious, else None."""

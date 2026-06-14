@@ -217,6 +217,43 @@ def _find_shell_suspicions(command: str) -> list[str]:
     return suspicions
 
 
+# pip flags that reference a requirements/constraint manifest file.
+_MANIFEST_FLAGS = frozenset({"-r", "--requirement", "-c", "--constraint"})
+
+
+def _parse_shell_manifests(command: str) -> tuple[list[str], list[str]]:
+    """Find pip ``-r``/``-c`` manifest references in *command*.
+
+    Returns ``(local_paths, suspicions)``. Local file paths are scanned with
+    ``ascan_file``; remote references (http(s)://) are returned as suspicions
+    because their contents cannot be statically verified.
+    """
+    paths: list[str] = []
+    suspicions: list[str] = []
+    for pattern, ecosystem in _INSTALL_PATTERNS:
+        if ecosystem is not Ecosystem.PYPI:
+            continue
+        for match in pattern.finditer(command):
+            tokens = re.sub(r"\\\n", " ", match.group(1)).split()
+            i = 0
+            while i < len(tokens):
+                flag, _, inline = tokens[i].partition("=")
+                if flag in _MANIFEST_FLAGS:
+                    if inline:
+                        value = inline
+                    elif i + 1 < len(tokens):
+                        value = tokens[i + 1]
+                        i += 1
+                    else:
+                        value = ""
+                    if value and "://" in value:
+                        suspicions.append(f"unanalyzable remote requirements file '{value}'")
+                    elif value:
+                        paths.append(value)
+                i += 1
+    return paths, suspicions
+
+
 # ── plugin ────────────────────────────────────────────────────────────────────
 
 
@@ -272,7 +309,8 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
         # Check for patterns that cannot be statically analyzed (must happen before
         # _parse_shell_packages so that commands like `pip install $PKG` that produce
         # an empty pkg_list are not accidentally passed through)
-        suspicions = _find_shell_suspicions(command)
+        manifest_paths, manifest_suspicions = _parse_shell_manifests(command)
+        suspicions = _find_shell_suspicions(command) + manifest_suspicions
         if suspicions:
             return ToolResult.error(
                 "AgentShield blocked shell command — cannot verify package source:\n"
@@ -280,7 +318,7 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
             )
 
         pkg_list = _parse_shell_packages(command)
-        if not pkg_list:
+        if not pkg_list and not manifest_paths:
             return call
 
         blocked_messages: list[str] = []
@@ -297,6 +335,19 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
                 blocked_messages.append(f"{pkg_name}: {result.decision.reason}")
             elif result.decision.action == DecisionAction.NEEDS_CONFIRMATION:
                 confirmation_findings.extend(result.findings)
+
+        # Scan packages declared in referenced requirements/constraint files.
+        for manifest in manifest_paths:
+            manifest_path = Path(manifest)
+            if not manifest_path.exists():
+                continue
+            file_result = await self.shield.ascan_file(manifest_path)
+            action = file_result.aggregate_decision.action
+            if action == DecisionAction.BLOCK:
+                blocked_messages.append(f"{manifest}: {file_result.aggregate_decision.reason}")
+            elif action == DecisionAction.NEEDS_CONFIRMATION:
+                for r in file_result.results:
+                    confirmation_findings.extend(r.findings)
 
         if blocked_messages:
             return ToolResult.error(

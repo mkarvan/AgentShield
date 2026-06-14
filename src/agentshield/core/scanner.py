@@ -309,12 +309,20 @@ class AgentShield:
         from agentshield.analyzers.setup_py_inspector import inspect_package_directory
         from agentshield.analyzers.wheel_extractor import WheelExtractionError, extracted_package
         from agentshield.core.models import Ecosystem
+        from agentshield.core.rate_limiter import RateLimiter
 
         findings: list[Finding] = []
 
+        # Cap each download at the per-session wheel budget and feed the actual
+        # byte count back so max_wheel_mb_per_session is enforced across scans.
+        rl = RateLimiter(self.config.cache.db_path, self.config.rate_limits)
+        max_bytes = self.config.rate_limits.max_wheel_mb_per_session * 1024 * 1024
+
         if request.ecosystem == Ecosystem.PYPI:
             try:
-                async with extracted_package(request) as pkg_dir:
+                async with extracted_package(
+                    request, max_bytes=max_bytes, on_download=rl.record_wheel_bytes
+                ) as pkg_dir:
                     results = await asyncio.gather(
                         run_semgrep(pkg_dir, request),
                         run_bandit(pkg_dir, request),
@@ -340,7 +348,9 @@ class AgentShield:
 
         elif request.ecosystem == Ecosystem.NPM:
             try:
-                async with extracted_package(request) as pkg_dir:
+                async with extracted_package(
+                    request, max_bytes=max_bytes, on_download=rl.record_wheel_bytes
+                ) as pkg_dir:
                     npm_findings = await run_npm_audit(pkg_dir, request)
                     findings.extend(npm_findings)
             except Exception as exc:
@@ -348,7 +358,9 @@ class AgentShield:
 
         elif request.ecosystem == Ecosystem.CARGO:
             try:
-                async with extracted_package(request) as pkg_dir:
+                async with extracted_package(
+                    request, max_bytes=max_bytes, on_download=rl.record_wheel_bytes
+                ) as pkg_dir:
                     cargo_findings = await run_cargo_audit(pkg_dir, request)
                     findings.extend(cargo_findings)
             except Exception as exc:

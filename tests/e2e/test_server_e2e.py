@@ -58,15 +58,25 @@ async def _http_request(
         writer.write(headers.encode() + payload)
         await writer.drain()
 
-        response_data = await reader.read(65536)
-        response = response_data.decode(errors="replace")
+        # Read headers line-by-line until the blank separator line.
+        header_lines: list[str] = []
+        while True:
+            line = await reader.readline()
+            decoded = line.decode(errors="replace").rstrip("\r\n")
+            if not decoded:
+                break
+            header_lines.append(decoded)
 
-        status_line = response.split("\r\n")[0]
-        status_code = int(status_line.split(" ")[1])
+        status_code = int(header_lines[0].split(" ")[1]) if header_lines else 0
 
-        body_start = response.find("\r\n\r\n")
-        body_text = response[body_start + 4 :] if body_start != -1 else ""
-        parsed_body: dict = json.loads(body_text) if body_text.strip() else {}
+        content_length = 0
+        for h in header_lines[1:]:
+            if h.lower().startswith("content-length:"):
+                content_length = int(h.split(":", 1)[1].strip())
+                break
+
+        body_bytes = await reader.readexactly(content_length) if content_length > 0 else b""
+        parsed_body: dict = json.loads(body_bytes) if body_bytes else {}
 
         return status_code, parsed_body
     finally:

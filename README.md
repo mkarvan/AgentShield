@@ -6,6 +6,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![v0.7.0](https://img.shields.io/badge/version-0.7.0-brightgreen)](#)
 
+> **AI agent?** Skip straight to the **[Agent Setup Guide](AGENT_SETUP.md)** — it has everything your agent needs to integrate AgentShield in one self-contained document.
+
 ---
 
 ## Why this exists

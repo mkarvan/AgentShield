@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![v0.7.0](https://img.shields.io/badge/version-0.7.0-brightgreen)](#)
+[![v0.8.0](https://img.shields.io/badge/version-0.8.0-brightgreen)](#)
 
 > **AI agent?** Skip straight to the **[Agent Setup Guide](AGENT_SETUP.md)** — it has everything your agent needs to integrate AgentShield in one self-contained document.
 
@@ -1287,7 +1287,7 @@ The HTTP server uses Python's asyncio stdlib — no extra dependencies required.
 
 ## agentshield guard
 
-Start an interactive shell session where `pip`, `npm`, and `cargo` install commands are intercepted before execution:
+Start an interactive shell session where `pip`, `npm`, and `cargo` install commands are intercepted before execution. System package managers (`apt-get`, `yum`, `dnf`, `brew`, `apk`, `pacman`, `zypper`, `pkg`, `emerge`, `snap`, `flatpak`) are also monitored — they emit warnings but do not block:
 
 ```bash
 agentshield guard              # wraps $SHELL (bash, zsh, or fish)
@@ -1295,6 +1295,8 @@ agentshield guard --shell zsh  # wrap a specific shell
 ```
 
 Inside the guarded shell, the package manager commands are shadowed by wrapper functions. Any `pip install`, `npm install`, or `cargo add`/`cargo install` calls `agentshield guard-scan-cmd` first — if AgentShield blocks the package, the install is aborted and the error is printed before the command runs. Packages declared in a referenced requirements/constraint file (`pip install -r requirements.txt`) are resolved and scanned as well; a remote `-r <url>` is blocked because its contents cannot be verified.
+
+System package managers are also intercepted: `apt-get install`, `brew install`, `yum install`, `dnf install`, `apk add`, `pacman -S`, `zypper install`, `snap install`, `flatpak install`, `pkg install`, and `emerge` all trigger an SP1.1 warning identifying the packages being installed. These warnings are informational only — the install always proceeds.
 
 ```
 [AgentShield Guard] Active — pip, npm, and cargo install commands are protected.

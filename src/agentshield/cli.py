@@ -700,10 +700,12 @@ def guard_scan_cmd(
 
     Scans all packages detected in a shell install command.
     Exits 0 if safe, 1 if any package is blocked.
+    Also emits warnings for system package manager invocations.
     """
     import shlex
     from pathlib import Path
 
+    from agentshield.analyzers.syspkg_detector import detect_syspkg_commands
     from agentshield.core.config import Config
     from agentshield.integrations.hermes.plugin import (
         _find_shell_suspicions,
@@ -715,6 +717,12 @@ def guard_scan_cmd(
     err_console = Console(stderr=True)
     cfg = Config.load(config)
     shield = AgentShield(config=cfg)
+
+    # ── system package manager warnings (never block) ────────────────────────
+    syspkg_warnings = detect_syspkg_commands(command)
+    if syspkg_warnings:
+        for w in syspkg_warnings:
+            console.print(f"[yellow]AgentShield WARNING [SP1.1]: {w.title}[/yellow]")
 
     manifest_paths, manifest_suspicions = _parse_shell_manifests(command)
     suspicions = _find_shell_suspicions(command) + manifest_suspicions

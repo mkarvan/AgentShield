@@ -171,3 +171,23 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - `guard-scan-cmd` is a hidden CLI command that parses the shell command (reuses hermes `_parse_shell_packages`), scans all detected packages, and exits 1 if any are blocked
 - `agentshield guard [--shell zsh]` CLI command launches the wrapped shell session
 - 24 unit tests in `tests/unit/test_shell_wrapper.py`
+
+## v0.8.0 (done)
+
+### System package manager detection (done)
+
+- `src/agentshield/analyzers/syspkg_detector.py` — `detect_syspkg_commands()` parses shell commands for system package manager invocations
+- Supported managers: apt-get, apt, yum, dnf, brew, apk, pacman, zypper, pkg, emerge, snap, flatpak
+- **Warning-only** — emits SP1.1 findings at INFO severity; never blocks installation
+- Extracts package names where parseable; handles sudo prefixes, compound commands (&&, ||, ;, |)
+- Wired into `guard-scan-cmd` CLI command — warnings printed before package scanning
+- Shell guard wrapper functions added for all supported managers in bash, zsh, and fish init scripts
+- Unit tests in `tests/unit/test_syspkg_detector.py`; e2e tests in `tests/e2e/test_syspkg_e2e.py`
+
+## v0.9.0 (planned)
+
+### CVE scanning for system packages
+
+- Query distro security trackers (Debian Security Tracker, Red Hat CVE DB, Ubuntu USN, Homebrew audit) for installed system packages
+- Integrate with `syspkg_detector.py` to provide vulnerability data for detected system package installs
+- Configurable severity threshold for system package CVE warnings

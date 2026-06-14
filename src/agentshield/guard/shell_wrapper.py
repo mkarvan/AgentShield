@@ -32,6 +32,7 @@ _BASH_INIT = """\
 # AgentShield Guard — bash integration
 # Wrapper functions shadow pip, npm, and cargo.  Install commands are
 # checked by AgentShield before execution; the install is aborted on BLOCK.
+# System package managers (apt-get, brew, etc.) emit warnings but do not block.
 
 function pip() {
     if [[ "$1" == "install" ]]; then
@@ -61,8 +62,79 @@ function cargo() {
     command cargo "$@"
 }
 
+# System package managers — warn only, never block
+# Note: -- stops typer from interpreting package-manager flags (e.g. pacman -S)
+function apt-get() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- apt-get "$@"
+    fi
+    command apt-get "$@"
+}
+
+function apt() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- apt "$@"
+    fi
+    command apt "$@"
+}
+
+function yum() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- yum "$@"
+    fi
+    command yum "$@"
+}
+
+function dnf() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- dnf "$@"
+    fi
+    command dnf "$@"
+}
+
+function brew() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- brew "$@"
+    fi
+    command brew "$@"
+}
+
+function apk() {
+    if [[ "$1" == "add" ]]; then
+        agentshield guard-scan-cmd -- apk "$@"
+    fi
+    command apk "$@"
+}
+
+function pacman() {
+    agentshield guard-scan-cmd -- pacman "$@"
+    command pacman "$@"
+}
+
+function zypper() {
+    if [[ "$1" == "install" || "$1" == "in" ]]; then
+        agentshield guard-scan-cmd -- zypper "$@"
+    fi
+    command zypper "$@"
+}
+
+function snap() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- snap "$@"
+    fi
+    command snap "$@"
+}
+
+function flatpak() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- flatpak "$@"
+    fi
+    command flatpak "$@"
+}
+
 export PS1="[guard] $PS1"
 echo "[AgentShield Guard] Active — pip, npm, and cargo install commands are protected."
+echo "[AgentShield Guard] System package managers (apt-get, brew, etc.) are monitored (warn-only)."
 """
 
 _ZSH_INIT = """\
@@ -96,8 +168,79 @@ function cargo() {
     command cargo "$@"
 }
 
+# System package managers — warn only, never block
+# Note: -- stops typer from interpreting package-manager flags (e.g. pacman -S)
+function apt-get() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- apt-get "$@"
+    fi
+    command apt-get "$@"
+}
+
+function apt() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- apt "$@"
+    fi
+    command apt "$@"
+}
+
+function yum() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- yum "$@"
+    fi
+    command yum "$@"
+}
+
+function dnf() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- dnf "$@"
+    fi
+    command dnf "$@"
+}
+
+function brew() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- brew "$@"
+    fi
+    command brew "$@"
+}
+
+function apk() {
+    if [[ "$1" == "add" ]]; then
+        agentshield guard-scan-cmd -- apk "$@"
+    fi
+    command apk "$@"
+}
+
+function pacman() {
+    agentshield guard-scan-cmd -- pacman "$@"
+    command pacman "$@"
+}
+
+function zypper() {
+    if [[ "$1" == "install" || "$1" == "in" ]]; then
+        agentshield guard-scan-cmd -- zypper "$@"
+    fi
+    command zypper "$@"
+}
+
+function snap() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- snap "$@"
+    fi
+    command snap "$@"
+}
+
+function flatpak() {
+    if [[ "$1" == "install" ]]; then
+        agentshield guard-scan-cmd -- flatpak "$@"
+    fi
+    command flatpak "$@"
+}
+
 export PROMPT="[guard] $PROMPT"
 echo "[AgentShield Guard] Active — pip, npm, and cargo install commands are protected."
+echo "[AgentShield Guard] System package managers (apt-get, brew, etc.) are monitored (warn-only)."
 """
 
 _FISH_INIT = """\
@@ -131,7 +274,78 @@ function cargo
     command cargo $argv
 end
 
+# System package managers — warn only, never block
+# Note: -- stops typer from interpreting package-manager flags (e.g. pacman -S)
+function apt-get
+    if test "$argv[1]" = "install"
+        agentshield guard-scan-cmd -- apt-get $argv
+    end
+    command apt-get $argv
+end
+
+function apt
+    if test "$argv[1]" = "install"
+        agentshield guard-scan-cmd -- apt $argv
+    end
+    command apt $argv
+end
+
+function yum
+    if test "$argv[1]" = "install"
+        agentshield guard-scan-cmd -- yum $argv
+    end
+    command yum $argv
+end
+
+function dnf
+    if test "$argv[1]" = "install"
+        agentshield guard-scan-cmd -- dnf $argv
+    end
+    command dnf $argv
+end
+
+function brew
+    if test "$argv[1]" = "install"
+        agentshield guard-scan-cmd -- brew $argv
+    end
+    command brew $argv
+end
+
+function apk
+    if test "$argv[1]" = "add"
+        agentshield guard-scan-cmd -- apk $argv
+    end
+    command apk $argv
+end
+
+function pacman
+    agentshield guard-scan-cmd -- pacman $argv
+    command pacman $argv
+end
+
+function zypper
+    if test "$argv[1]" = "install"; or test "$argv[1]" = "in"
+        agentshield guard-scan-cmd -- zypper $argv
+    end
+    command zypper $argv
+end
+
+function snap
+    if test "$argv[1]" = "install"
+        agentshield guard-scan-cmd -- snap $argv
+    end
+    command snap $argv
+end
+
+function flatpak
+    if test "$argv[1]" = "install"
+        agentshield guard-scan-cmd -- flatpak $argv
+    end
+    command flatpak $argv
+end
+
 echo "[AgentShield Guard] Active — pip, npm, and cargo install commands are protected."
+echo "[AgentShield Guard] System package managers (apt-get, brew, etc.) are monitored (warn-only)."
 """
 
 _SHELL_SCRIPTS: dict[str, str] = {

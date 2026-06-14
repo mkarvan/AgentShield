@@ -350,6 +350,53 @@ def scan_file(
 
 
 @app.command()
+def sbom(
+    path: Path = typer.Argument(
+        ...,
+        help="Path to manifest file (requirements.txt, package.json, Cargo.toml, package-lock.json)",
+    ),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Write SBOM to this file"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+    offline: bool = typer.Option(False, "--offline", help="Use only local DB — no network calls"),
+) -> None:
+    """Scan a manifest file and output a CycloneDX v1.4 SBOM.
+
+    \b
+    agentshield sbom requirements.txt             # JSON to stdout
+    agentshield sbom package.json -o sbom.json    # JSON to file
+    """
+    from agentshield.core.config import Config
+    from agentshield.core.sbom import generate_sbom_json
+
+    cfg = Config.load(config)
+    if offline:
+        cfg = cfg.model_copy(update={"offline": True})
+
+    shield = AgentShield(config=cfg)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn(f"[cyan]Scanning {path.name} for SBOM…[/cyan]"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("sbom", total=None)
+        file_result = asyncio.run(shield.ascan_file(path))
+
+    sbom_text = generate_sbom_json(file_result.results, source_path=str(path))
+
+    if output:
+        output.write_text(sbom_text)
+        console.print(f"[green]SBOM written to {output}[/green]")
+    else:
+        console.print(sbom_text)
+
+    if file_result.aggregate_decision.action == DecisionAction.BLOCK:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def serve(
     mcp: bool = typer.Option(False, "--mcp", help="Run as MCP tool server (stdio transport)"),
     socket: Path | None = typer.Option(

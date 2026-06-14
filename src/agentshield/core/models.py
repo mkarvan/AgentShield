@@ -85,7 +85,38 @@ class ResponseMode(str, Enum):
 
 
 class DecisionAction(str, Enum):
-    """The concrete action returned to the calling integration."""
+    """The concrete action returned to the calling integration.
+
+    Relationship to ResponseMode
+    ----------------------------
+    ``ResponseMode`` (set in config) is the *policy*; ``DecisionAction`` is the
+    *output* that policy produces.  Mapping at a glance:
+
+    * ``ResponseMode.BLOCK``          → ``DecisionAction.BLOCK``
+    * ``ResponseMode.WARN_CONFIRM``   → ``DecisionAction.NEEDS_CONFIRMATION``
+    * ``ResponseMode.ASYNC_REPORT``   → ``DecisionAction.LOG_ASYNC``
+    * ``ResponseMode.IGNORE``         → ``DecisionAction.ALLOW``
+
+    Values
+    ------
+    ALLOW
+        Package passed all checks.  The caller may proceed without interruption.
+    BLOCK
+        Package failed a check above the configured block threshold.  The caller
+        must not install it.  Callers should surface the decision reason to the
+        user before aborting.
+    NEEDS_CONFIRMATION
+        Produced when ``ResponseMode.WARN_CONFIRM`` is active and a finding
+        meets the warn threshold but not the block threshold.  The calling
+        integration must pause the operation, present the findings to a human,
+        and wait for an explicit allow/deny before proceeding.  This is
+        different from ``BLOCK`` — the user *can* override it.
+    LOG_ASYNC
+        Produced when ``ResponseMode.ASYNC_REPORT`` is active.  The package is
+        allowed to install immediately, but the finding is written to the async
+        report log for later review.  Use this for low-noise, non-interactive
+        pipelines that want auditability without blocking.
+    """
 
     ALLOW = "ALLOW"
     BLOCK = "BLOCK"

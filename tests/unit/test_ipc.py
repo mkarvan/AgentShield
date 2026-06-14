@@ -6,10 +6,11 @@ import asyncio
 import contextlib
 import json
 import os
+import sys
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,7 +23,7 @@ from agentshield.core.models import (
     ScanResult,
     Severity,
 )
-from agentshield.server.ipc import IPCServer, _error
+from agentshield.server.ipc import IPCServer, _error, get_peer_uid, peer_cred_supported
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -394,3 +395,280 @@ async def test_ipc_disconnect_handled_gracefully(live_server: IPCServer) -> None
 
     writer2.close()
     await writer2.wait_closed()
+
+
+# ── peer_cred_supported ───────────────────────────────────────────────────────
+
+
+def test_peer_cred_supported_returns_bool() -> None:
+    result = peer_cred_supported()
+    assert isinstance(result, bool)
+
+
+def test_peer_cred_supported_on_known_platforms() -> None:
+    if sys.platform in ("linux", "darwin"):
+        assert peer_cred_supported() is True
+
+
+def test_peer_cred_supported_false_on_other_platforms() -> None:
+    with patch("agentshield.server.ipc.sys") as mock_sys:
+        mock_sys.platform = "win32"
+        assert peer_cred_supported() is False
+
+
+# ── get_peer_uid ──────────────────────────────────────────────────────────────
+
+
+def test_get_peer_uid_returns_none_when_no_socket() -> None:
+    writer = MagicMock(spec=asyncio.StreamWriter)
+    writer.get_extra_info = MagicMock(return_value=None)
+    assert get_peer_uid(writer) is None
+
+
+def test_get_peer_uid_returns_none_on_os_error() -> None:
+    mock_sock = MagicMock()
+    mock_sock.getsockopt = MagicMock(side_effect=OSError("not a socket"))
+    writer = MagicMock(spec=asyncio.StreamWriter)
+    writer.get_extra_info = MagicMock(return_value=mock_sock)
+    # Test on actual platform without mocking — OSError from getsockopt is caught
+    assert get_peer_uid(writer) is None
+
+
+# ── auth: require_auth=False ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_authenticate_disabled_always_passes(dummy_sock_path: Path) -> None:
+    server = IPCServer(shield=_make_shield(), sock_path=dummy_sock_path, require_auth=False)
+    reader: asyncio.StreamReader = MagicMock()
+    writer: asyncio.StreamWriter = MagicMock()
+    assert await server._authenticate(reader, writer) is True
+
+
+# ── auth: peer credential mode ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_authenticate_peer_cred_same_uid_passes(dummy_sock_path: Path) -> None:
+    server = IPCServer(shield=_make_shield(), sock_path=dummy_sock_path)
+    server._use_peer_cred = True
+    reader: asyncio.StreamReader = MagicMock()
+    writer: asyncio.StreamWriter = MagicMock()
+
+    with patch("agentshield.server.ipc.get_peer_uid", return_value=os.getuid()):
+        assert await server._authenticate(reader, writer) is True
+
+
+@pytest.mark.asyncio
+async def test_authenticate_peer_cred_wrong_uid_rejected(dummy_sock_path: Path) -> None:
+    server = IPCServer(shield=_make_shield(), sock_path=dummy_sock_path)
+    server._use_peer_cred = True
+    reader: asyncio.StreamReader = MagicMock()
+    writer: asyncio.StreamWriter = MagicMock()
+
+    with patch("agentshield.server.ipc.get_peer_uid", return_value=os.getuid() + 9999):
+        assert await server._authenticate(reader, writer) is False
+
+
+@pytest.mark.asyncio
+async def test_authenticate_peer_cred_none_uid_rejected(dummy_sock_path: Path) -> None:
+    server = IPCServer(shield=_make_shield(), sock_path=dummy_sock_path)
+    server._use_peer_cred = True
+    reader: asyncio.StreamReader = MagicMock()
+    writer: asyncio.StreamWriter = MagicMock()
+
+    with patch("agentshield.server.ipc.get_peer_uid", return_value=None):
+        assert await server._authenticate(reader, writer) is False
+
+
+# ── auth: token fallback mode ─────────────────────────────────────────────────
+
+
+def _make_token_server(sock_path: Path, token_dir: Path) -> tuple[IPCServer, str]:
+    """Return (server, token) with peer creds disabled so token auth is used."""
+    with patch("agentshield.server.ipc.peer_cred_supported", return_value=False):
+        server = IPCServer(
+            shield=_make_shield(),
+            sock_path=sock_path,
+            token_path=token_dir / "ipc.token",
+        )
+    assert server._token is not None
+    return server, server._token
+
+
+@pytest.fixture
+def token_server(dummy_sock_path: Path, tmp_path: Path) -> tuple[IPCServer, str]:
+    return _make_token_server(dummy_sock_path, tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_token_auth_valid_token_passes(
+    token_server: tuple[IPCServer, str],
+) -> None:
+    server, token = token_server
+    reader = AsyncMock(spec=asyncio.StreamReader)
+    reader.readline = AsyncMock(return_value=f"AUTH {token}\n".encode())
+    writer = MagicMock()
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+
+    assert await server._authenticate(reader, writer) is True
+    writer.write.assert_called_once_with(b"OK\n")
+
+
+@pytest.mark.asyncio
+async def test_token_auth_invalid_token_rejected(
+    token_server: tuple[IPCServer, str],
+) -> None:
+    server, _ = token_server
+    reader = AsyncMock(spec=asyncio.StreamReader)
+    reader.readline = AsyncMock(return_value=b"AUTH wrongsecret\n")
+    writer = MagicMock()
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+
+    assert await server._authenticate(reader, writer) is False
+    writer.write.assert_called_once_with(b"ERR unauthorized\n")
+
+
+@pytest.mark.asyncio
+async def test_token_auth_missing_auth_prefix_rejected(
+    token_server: tuple[IPCServer, str],
+) -> None:
+    server, token = token_server
+    reader = AsyncMock(spec=asyncio.StreamReader)
+    # Sends just the token with no "AUTH " prefix
+    reader.readline = AsyncMock(return_value=f"{token}\n".encode())
+    writer = MagicMock()
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+
+    assert await server._authenticate(reader, writer) is False
+
+
+@pytest.mark.asyncio
+async def test_token_auth_empty_line_rejected(
+    token_server: tuple[IPCServer, str],
+) -> None:
+    server, _ = token_server
+    reader = AsyncMock(spec=asyncio.StreamReader)
+    reader.readline = AsyncMock(return_value=b"\n")
+    writer = MagicMock()
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+
+    assert await server._authenticate(reader, writer) is False
+
+
+@pytest.mark.asyncio
+async def test_token_auth_timeout_rejected(
+    token_server: tuple[IPCServer, str],
+) -> None:
+    server, _ = token_server
+    reader = AsyncMock(spec=asyncio.StreamReader)
+    # Raise TimeoutError from inside the coroutine — wait_for propagates it
+    reader.readline = AsyncMock(side_effect=TimeoutError)
+    writer = MagicMock()
+    writer.write = MagicMock()
+    writer.drain = AsyncMock()
+
+    assert await server._authenticate(reader, writer) is False
+
+
+def test_token_file_written_with_restricted_permissions(
+    dummy_sock_path: Path, tmp_path: Path
+) -> None:
+    server, token = _make_token_server(dummy_sock_path, tmp_path)
+    token_file = tmp_path / "ipc.token"
+
+    assert token_file.exists()
+    assert token_file.read_text() == token
+    assert oct(token_file.stat().st_mode & 0o777) == oct(0o600)
+
+
+def test_token_is_64_hex_chars(dummy_sock_path: Path, tmp_path: Path) -> None:
+    _, token = _make_token_server(dummy_sock_path, tmp_path)
+    # secrets.token_hex(32) → 64 hex characters
+    assert len(token) == 64
+    assert all(c in "0123456789abcdef" for c in token)
+
+
+# ── token auth over real socket ───────────────────────────────────────────────
+
+
+@pytest.fixture
+async def live_token_server(tmp_path: Path) -> AsyncIterator[IPCServer]:
+    """Start a real IPC server that uses token-based auth."""
+    fd, p = tempfile.mkstemp(suffix=".sock", dir="/tmp")
+    os.close(fd)
+    os.unlink(p)
+    sock_path = Path(p)
+
+    with patch("agentshield.server.ipc.peer_cred_supported", return_value=False):
+        server = IPCServer(
+            shield=_make_shield(),
+            sock_path=sock_path,
+            token_path=tmp_path / "ipc.token",
+        )
+
+    task: asyncio.Task[None] = asyncio.create_task(server.start())
+
+    for _ in range(200):
+        if sock_path.exists():
+            break
+        await asyncio.sleep(0.01)
+    else:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        pytest.fail("token IPC server socket did not appear within 2s")
+
+    yield server
+
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await task
+    with contextlib.suppress(FileNotFoundError):
+        sock_path.unlink()
+
+
+@pytest.mark.asyncio
+async def test_token_server_valid_auth_then_ping(live_token_server: IPCServer) -> None:
+    assert live_token_server._token is not None
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_unix_connection(str(live_token_server.sock_path)), timeout=2.0
+    )
+    # Send auth
+    writer.write(f"AUTH {live_token_server._token}\n".encode())
+    await writer.drain()
+    ok = await asyncio.wait_for(reader.readline(), timeout=2.0)
+    assert ok == b"OK\n"
+
+    # Send ping
+    writer.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}).encode() + b"\n")
+    await writer.drain()
+    data = await asyncio.wait_for(reader.readline(), timeout=2.0)
+    resp = json.loads(data)
+    assert resp["result"] == "pong"
+
+    writer.close()
+    await writer.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_token_server_wrong_auth_closes_connection(live_token_server: IPCServer) -> None:
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_unix_connection(str(live_token_server.sock_path)), timeout=2.0
+    )
+    writer.write(b"AUTH wrongtoken\n")
+    await writer.drain()
+
+    err_line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+    assert err_line == b"ERR unauthorized\n"
+
+    # Server closes after rejection — any further read returns b""
+    tail = await asyncio.wait_for(reader.read(1024), timeout=2.0)
+    assert tail == b""
+
+    writer.close()
+    await writer.wait_closed()

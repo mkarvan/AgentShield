@@ -115,6 +115,28 @@ _TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "agentshield_sbom",
+        "description": (
+            "Scan a manifest file and return a CycloneDX v1.4 SBOM (Software Bill of "
+            "Materials) in JSON format.  The SBOM lists all packages as components and "
+            "includes a vulnerabilities section for any findings."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Absolute or relative path to the manifest file. "
+                        "Supported: requirements.txt, package.json, Cargo.toml, "
+                        "package-lock.json."
+                    ),
+                },
+            },
+            "required": ["path"],
+        },
+    },
 ]
 
 
@@ -201,6 +223,8 @@ class MCPServer:
             return await self._tool_scan_file(args)
         if name == "agentshield_posture":
             return await self._tool_posture(args)
+        if name == "agentshield_sbom":
+            return await self._tool_sbom(args)
         return _tool_error(f"Unknown tool: {name!r}")
 
     async def _tool_scan(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -294,6 +318,23 @@ class MCPServer:
 
         except Exception as exc:
             return _tool_error(f"scan-file failed: {exc}")
+
+    async def _tool_sbom(self, args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            path_str = args["path"]
+        except KeyError:
+            return _tool_error("Missing required argument: 'path'")
+
+        try:
+            from pathlib import Path as _Path
+
+            from agentshield.core.sbom import generate_sbom_json
+
+            result = await self.shield.ascan_file(_Path(path_str))
+            sbom_text = generate_sbom_json(result.results, source_path=path_str)
+            return {"content": [{"type": "text", "text": sbom_text}]}
+        except Exception as exc:
+            return _tool_error(f"SBOM generation failed: {exc}")
 
     async def _tool_posture(self, args: dict[str, Any]) -> dict[str, Any]:
         try:

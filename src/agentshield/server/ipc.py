@@ -15,6 +15,17 @@ Response::
      "result": {"decision": "ALLOW", "findings": [], "cache_hit": true},
      "id": 1}
 
+Authentication
+--------------
+On Linux and macOS the server uses peer credential checks (SO_PEERCRED on
+Linux, LOCAL_PEERCRED via getsockopt on macOS) to verify that the connecting
+process runs as the same UID as the server.  On platforms that do not support
+peer credentials the server falls back to a shared-secret token: a random
+64-character hex token is generated at startup and written to
+``~/.agentshield/ipc.token`` (mode 0o600).  Clients must send
+``AUTH <token>\\n`` as their very first message; the server replies ``OK\\n``
+on success or ``ERR unauthorized\\n`` on failure.
+
 Start with ``agentshield serve`` (default socket: ``~/.agentshield/agentshield.sock``).
 """
 
@@ -23,6 +34,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import secrets
+import socket as _socket
+import struct
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -32,18 +48,103 @@ from agentshield.core.scanner import AgentShield
 logger = logging.getLogger(__name__)
 
 DEFAULT_SOCK_PATH = Path.home() / ".agentshield" / "agentshield.sock"
+_DEFAULT_TOKEN_PATH = Path.home() / ".agentshield" / "ipc.token"
+
+
+# ── peer credential helpers ───────────────────────────────────────────────────
+
+
+def peer_cred_supported() -> bool:
+    """Return True if this platform natively supports peer credential checks."""
+    return sys.platform in ("linux", "darwin")
+
+
+def get_peer_uid(writer: asyncio.StreamWriter) -> int | None:
+    """Return the UID of the connecting process, or None if unavailable.
+
+    Uses SO_PEERCRED on Linux and LOCAL_PEERCRED (via getsockopt) on macOS.
+    Both work on the asyncio.trsock.TransportSocket returned by get_extra_info.
+    """
+    sock: Any = writer.get_extra_info("socket")
+    if sock is None:
+        return None
+    try:
+        if sys.platform == "linux":
+            # struct ucred { __u32 pid; __u32 uid; __u32 gid; }
+            raw = sock.getsockopt(
+                _socket.SOL_SOCKET,
+                _socket.SO_PEERCRED,  # type: ignore[attr-defined]
+                struct.calcsize("3I"),
+            )
+            _, uid, _ = struct.unpack("3I", raw)
+            return int(uid)
+        if sys.platform == "darwin":
+            # struct xucred { u_int cr_version; uid_t cr_uid; short cr_ngroups; gid_t cr_groups[16]; }
+            # SOL_LOCAL=0, LOCAL_PEERCRED=0x0001 (from <sys/un.h>)
+            _SOL_LOCAL = 0
+            _LOCAL_PEERCRED = 0x0001
+            raw = sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERCRED, 76)
+            _, uid = struct.unpack_from("=II", raw)
+            return int(uid)
+    except (OSError, AttributeError):
+        # AttributeError: SO_PEERCRED not available on this platform build
+        pass
+    return None
+
+
+# ── token helper ──────────────────────────────────────────────────────────────
+
+
+def _write_token(token: str, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(token)
+    path.chmod(0o600)
+
+
+# ── server ────────────────────────────────────────────────────────────────────
 
 
 class IPCServer:
-    """JSON-RPC 2.0 server over a Unix domain socket."""
+    """JSON-RPC 2.0 server over a Unix domain socket.
+
+    Authentication
+    ~~~~~~~~~~~~~~
+    When *require_auth* is True (default):
+
+    * Linux / macOS — peer credential check via SO_PEERCRED / getpeereid().
+      The connecting process must run as the same UID as the server.
+    * Other platforms — shared-secret token fallback.  The server generates a
+      random token, writes it to *token_path* (mode 0o600), and expects each
+      client to send ``AUTH <token>\\n`` before any JSON-RPC message.
+
+    Set *require_auth=False* to disable authentication entirely (e.g. for
+    testing or when the socket is already protected by filesystem permissions
+    on a single-user system).
+    """
 
     def __init__(
         self,
         shield: AgentShield,
         sock_path: Path = DEFAULT_SOCK_PATH,
+        token_path: Path = _DEFAULT_TOKEN_PATH,
+        require_auth: bool = True,
     ) -> None:
         self.shield = shield
         self.sock_path = sock_path
+        self.token_path = token_path
+        self.require_auth = require_auth
+
+        self._use_peer_cred: bool = False
+        self._token: str | None = None
+
+        if require_auth:
+            if peer_cred_supported():
+                self._use_peer_cred = True
+                logger.debug("IPC auth: peer credential (UID check)")
+            else:
+                self._token = secrets.token_hex(32)
+                _write_token(self._token, self.token_path)
+                logger.info("IPC auth: token fallback — secret written to %s", self.token_path)
 
     async def start(self) -> None:
         """Create the socket, start listening, and serve until cancelled."""
@@ -61,7 +162,52 @@ class IPCServer:
         async with server:
             await server.serve_forever()
 
-    # ── internal ─────────────────────────────────────────────────────────────
+    # ── authentication ────────────────────────────────────────────────────────
+
+    async def _authenticate(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> bool:
+        """Return True if the client is allowed to proceed."""
+        if not self.require_auth:
+            return True
+
+        if self._use_peer_cred:
+            uid = get_peer_uid(writer)
+            if uid is None:
+                logger.warning("IPC: could not read peer credentials — rejecting")
+                return False
+            own_uid = os.getuid()
+            if uid != own_uid:
+                logger.warning("IPC: rejected connection from UID %d (server UID %d)", uid, own_uid)
+                return False
+            return True
+
+        # Token fallback: expect "AUTH <token>\n" as the first line
+        try:
+            line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+        except TimeoutError:
+            logger.warning("IPC: auth handshake timed out — rejecting")
+            return False
+
+        parts = line.decode(errors="replace").strip().split(" ", 1)
+        if (
+            len(parts) == 2
+            and parts[0] == "AUTH"
+            and self._token is not None
+            and secrets.compare_digest(parts[1], self._token)
+        ):
+            writer.write(b"OK\n")
+            await writer.drain()
+            return True
+
+        writer.write(b"ERR unauthorized\n")
+        await writer.drain()
+        logger.warning("IPC: invalid or missing auth token — rejecting connection")
+        return False
+
+    # ── connection handler ────────────────────────────────────────────────────
 
     async def _handle_client(
         self,
@@ -69,6 +215,9 @@ class IPCServer:
         writer: asyncio.StreamWriter,
     ) -> None:
         try:
+            if not await self._authenticate(reader, writer):
+                return
+
             while True:
                 data = await reader.readline()
                 if not data:

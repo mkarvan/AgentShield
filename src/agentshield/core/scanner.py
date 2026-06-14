@@ -122,7 +122,7 @@ class AgentShield:
         # T4.1 heuristic: detect prompt-injected install requests (local, no I/O)
         from agentshield.analyzers.prompt_injection import check_prompt_injection
 
-        t4_findings = check_prompt_injection(request)
+        t4_findings = await check_prompt_injection(request)
         if t4_findings:
             findings = _dedupe_findings(findings + t4_findings)
 

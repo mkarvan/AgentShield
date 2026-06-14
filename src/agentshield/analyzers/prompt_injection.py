@@ -31,7 +31,7 @@ _PATTERN_FACTORIES: list[Callable[[str], re.Pattern[str]]] = [
 ]
 
 
-def check_prompt_injection(request: ScanRequest) -> list[Finding]:
+async def check_prompt_injection(request: ScanRequest) -> list[Finding]:
     """Return a T4.1 Finding if context_hint suggests a prompt-injected install.
 
     Returns an empty list when context_hint is absent or no pattern matches.

@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![v0.2.0](https://img.shields.io/badge/version-0.2.0-brightgreen)](#)
+[![v0.3.0](https://img.shields.io/badge/version-0.3.0-brightgreen)](#)
 
 ---
 
@@ -29,10 +29,20 @@ AgentShield sits between the agent's intent ("install X") and the system executi
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [CLI reference](#cli-reference)
+  - [agentshield scan](#agentshield-scan)
+  - [agentshield scan-file](#agentshield-scan-file)
+  - [agentshield sbom](#agentshield-sbom)
+  - [agentshield posture](#agentshield-posture)
+  - [agentshield cache](#agentshield-cache)
+  - [agentshield serve](#agentshield-serve)
 - [Framework integrations](#framework-integrations)
 - [Posture reports](#posture-reports)
 - [Python API](#python-api)
 - [Static analysis (--deep)](#static-analysis---deep)
+- [Transitive dependency scanning](#transitive-dependency-scanning)
+- [SBOM generation](#sbom-generation)
+- [License compliance scanning](#license-compliance-scanning)
+- [pre-commit hook](#pre-commit-hook)
 - [Offline mode](#offline-mode)
 - [Caching](#caching)
 - [Contributing](#contributing)
@@ -155,8 +165,8 @@ Informed by *"A Systematic Taxonomy of Security Vulnerabilities in the OpenClaw 
 
 ### T4 — Agent-Specific Risks
 
-| ID | Threat | v0.1.0 coverage |
-|----|--------|-----------------|
+| ID | Threat | Coverage |
+|----|--------|---------|
 | T4.1 | Prompt-injected install | Heuristic: flags package names in quoted/code-block patterns in `context_hint` |
 | T4.2 | Excessive tool permissions | Posture report: tool risk classification |
 | T4.3 | Context exfiltration risk | Posture report: sensitive env var detection |
@@ -212,8 +222,14 @@ agentshield scan requests==2.28.0 --ecosystem pypi
 # 2. Deep scan — download wheel and run static analysis
 agentshield scan some-new-package --ecosystem pypi --deep
 
+# Scan package + its transitive dependencies
+agentshield scan flask --transitive
+
 # Scan an entire requirements.txt at once
 agentshield scan-file requirements.txt
+
+# Generate a CycloneDX SBOM from a manifest
+agentshield sbom requirements.txt
 
 # 3. Populate local database for offline use (~2–5 min first run)
 agentshield cache warm
@@ -301,6 +317,13 @@ max_entries = 50000
 [reporting]
 report_dir          = "~/.agentshield/reports/"
 auto_report_on_exit = true
+
+# ── License policy (opt-in) ───────────────────────────────────────────────────
+[license_policy]
+mode   = "disabled"    # disabled | denylist | allowlist | permissive-only
+denied = ["GPL-2.0-only", "GPL-2.0-or-later", "GPL-3.0-only", "GPL-3.0-or-later",
+          "AGPL-3.0-only", "AGPL-3.0-or-later", "SSPL-1.0", "EUPL-1.1", "OSL-3.0"]
+# allowed = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"]
 ```
 
 ### Response modes
@@ -354,6 +377,9 @@ Options:
   -c, --config    PATH               Path to config.toml (default: ~/.config/agentshield/config.toml)
   --deep                             Download wheel and run static analysis (semgrep + bandit + AST)
   --offline                          Local DB only — no network calls
+  -T, --transitive                   Resolve and scan transitive dependencies
+  --transitive-depth INT             Maximum resolution depth (default: 3, range 1–10)
+  --check-licenses                   Enable license compliance check (denylist mode with defaults)
 ```
 
 **Output:** Rich table of findings with severity, CVSS score, title, source, and remediation hint. Decision (ALLOW / BLOCK / NEEDS_CONFIRMATION / LOG_ASYNC) printed with colour coding.
@@ -370,6 +396,8 @@ agentshield scan serde --ecosystem cargo
 agentshield scan unknown-pkg --deep
 agentshield scan known-pkg --offline
 agentshield scan pkg -c /custom/config.toml
+agentshield scan flask --transitive              # scan flask + all its dependencies
+agentshield scan flask -T --transitive-depth 5  # deeper resolution (default: 3)
 ```
 
 ### `agentshield scan-file`
@@ -404,6 +432,30 @@ agentshield scan-file package.json
 agentshield scan-file package-lock.json
 agentshield scan-file Cargo.toml
 agentshield scan-file /path/to/dev-requirements.txt -c /custom/config.toml
+```
+
+### `agentshield sbom`
+
+Generate a CycloneDX v1.4 JSON Software Bill of Materials from a manifest file.
+
+```
+agentshield sbom <path> [OPTIONS]
+
+Arguments:
+  path    Path to a manifest file (same formats as scan-file)
+
+Options:
+  -o, --output PATH   Write SBOM to file (default: stdout)
+  -c, --config PATH   Path to config.toml
+```
+
+The SBOM includes PURL identifiers for every package and maps any vulnerability findings to their corresponding component entries.
+
+```bash
+# Examples
+agentshield sbom requirements.txt              # CycloneDX JSON to stdout
+agentshield sbom package.json -o sbom.json    # write to file
+agentshield sbom Cargo.toml -o sbom.json
 ```
 
 ### `agentshield posture`
@@ -583,6 +635,7 @@ SkillResult(
 | `agentshield_scan` | Scan a package; returns decision, findings, max severity |
 | `agentshield_scan_file` | Scan all packages in a manifest file |
 | `agentshield_posture` | Run posture check; returns full JSON report |
+| `agentshield_sbom` | Generate a CycloneDX v1.4 JSON SBOM from a manifest file |
 
 **`agentshield_scan` input schema:**
 ```json
@@ -623,11 +676,25 @@ SkillResult(
 }
 ```
 
+**`agentshield_sbom` input schema:**
+```json
+{
+  "path": "string (required) — path to manifest file"
+}
+```
+
+Returns: CycloneDX v1.4 JSON as a text content block.
+
 ---
 
 ### IPC daemon (Unix socket)
 
 Without `--mcp`, `agentshield serve` starts a Unix domain socket JSON-RPC 2.0 server at `~/.agentshield/agentshield.sock`. Useful for shell scripts and Claude Code hooks that need AgentShield without Python startup cost on every call.
+
+**Authentication:** The IPC server authenticates clients to prevent other local users from accessing the daemon.
+
+- **Linux / macOS** — peer credential check (SO_PEERCRED / LOCAL_PEERCRED). The server verifies that the connecting process runs as the same UID. No handshake required from the client.
+- **Other platforms** — shared-secret token fallback. A random token is generated at startup and written to `~/.agentshield/ipc.token` (mode 0o600). Clients must send `AUTH <token>\n` as their first message; the server replies `OK\n` on success or `ERR unauthorized\n` on failure.
 
 **Protocol — newline-delimited JSON:**
 ```json
@@ -642,7 +709,7 @@ Without `--mcp`, `agentshield serve` starts a Unix domain socket JSON-RPC 2.0 se
 
 **Available methods:** `scan`, `ping`.
 
-**Shell client example:**
+**Shell client example (Linux/macOS — peer credentials, no auth message needed):**
 ```bash
 echo '{"jsonrpc":"2.0","method":"scan","params":{"package":"requests","ecosystem":"pypi"},"id":1}' \
   | nc -U ~/.agentshield/agentshield.sock
@@ -650,7 +717,7 @@ echo '{"jsonrpc":"2.0","method":"scan","params":{"package":"requests","ecosystem
 
 ---
 
-### Claude Code hooks *(post-v0.1.0)*
+### Claude Code hooks
 
 Claude Code's `PreToolUse` hook can invoke `agentshield hook` to intercept Bash commands. The hook connects to the `agentshield serve` daemon for < 5 ms latency per check, avoiding Python startup cost.
 
@@ -830,6 +897,153 @@ Without `--deep`, AgentShield runs CVE database lookups and typosquatting checks
 | `T3_4_obfuscation.yaml` | T3.4 | `exec(base64.b64decode(...))`, marshal/zlib deobfuscation |
 | `T3_5_credential_harvest.yaml` | T3.5 | `os.environ.get("*_TOKEN")`, `os.environ["*_KEY"]` |
 
+> **See also:** `docs/deep-mode.md` documents the supply chain risks inherent in downloading packages for analysis and the recommended mitigations.
+
+---
+
+## Transitive dependency scanning
+
+Pass `-T` / `--transitive` to resolve and scan the full dependency tree of a package, not just the package itself.
+
+```bash
+agentshield scan flask --transitive                     # scan flask + all transitive deps
+agentshield scan django==4.2.0 -T --transitive-depth 5 # resolve up to 5 levels deep
+```
+
+`--transitive-depth` controls the maximum resolution depth (default: 3). Transitive results are printed in a separate summary table after the direct-package findings.
+
+Transitive scanning uses the registry API (PyPI JSON, npm registry, crates.io) to resolve dependency metadata without downloading or installing anything. It works alongside `--offline` (resolves from cache only) and `--deep` (also runs static analysis on transitive deps).
+
+---
+
+## SBOM generation
+
+`agentshield sbom` and the `agentshield_sbom` MCP tool generate a CycloneDX v1.4 JSON Software Bill of Materials from a manifest file. The output includes:
+
+- PURL identifiers for every listed package
+- Vulnerability findings mapped to their corresponding component entries
+
+```bash
+agentshield sbom requirements.txt              # CycloneDX JSON to stdout
+agentshield sbom package.json -o sbom.json    # write to file
+```
+
+Via MCP:
+```json
+{ "tool": "agentshield_sbom", "path": "requirements.txt" }
+```
+
+---
+
+## License compliance scanning
+
+AgentShield can check package licenses against a configurable policy before allowing installation. This is opt-in — add a `[license_policy]` section to `config.toml` to enable.
+
+### Configuration
+
+```toml
+[license_policy]
+mode   = "denylist"          # disabled | denylist | allowlist | permissive-only
+
+# Packages whose license matches any entry in `denied` are flagged.
+denied = [
+    "GPL-2.0-only", "GPL-2.0-or-later",
+    "GPL-3.0-only", "GPL-3.0-or-later",
+    "AGPL-3.0-only", "AGPL-3.0-or-later",
+    "SSPL-1.0", "EUPL-1.1", "OSL-3.0",
+]
+
+# Used in allowlist mode: only these licenses are allowed.
+# allowed = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"]
+```
+
+### Modes
+
+| Mode | Behaviour |
+|------|-----------|
+| `disabled` | No license checking (default) |
+| `denylist` | Flag packages whose license appears in `denied` |
+| `allowlist` | Flag packages whose license is NOT in `allowed` |
+| `permissive-only` | Flag any copyleft or known non-permissive license |
+
+### Severity mapping
+
+| License family | Severity |
+|----------------|----------|
+| GPL-2/3, AGPL-3, SSPL | CRITICAL |
+| LGPL-2/3, EUPL, OSL, MPL | HIGH |
+| Other denied/non-allowlisted | MEDIUM |
+
+### CLI usage
+
+```bash
+# One-off check using default denylist (no config.toml change needed):
+agentshield scan requests --check-licenses
+
+# With ecosystem:
+agentshield scan lodash --ecosystem npm --check-licenses
+```
+
+The `--check-licenses` flag activates `denylist` mode with default denied licenses even if `config.toml` has `mode = "disabled"`. If a non-disabled mode is already configured, the flag is a no-op.
+
+### MCP tool
+
+Pass `"check_licenses": true` to `agentshield_scan`:
+
+```json
+{
+  "package": "requests",
+  "ecosystem": "pypi",
+  "check_licenses": true
+}
+```
+
+### License data sources
+
+| Ecosystem | Source |
+|-----------|--------|
+| PyPI | Trove classifiers (primary), `info.license` field (fallback) |
+| npm | `license` field in registry metadata |
+| Cargo | `license` field in crates.io API (SPDX expression) |
+
+SPDX identifiers are normalised before comparison (`GPLv2` → `GPL-2.0-only`, `MIT License` → `MIT`, etc.).
+
+---
+
+## pre-commit hook
+
+AgentShield ships a [pre-commit](https://pre-commit.com/) hook that scans manifest files for vulnerable or malicious packages before every commit.
+
+### Setup
+
+```bash
+# 1. Install pre-commit (if not already installed)
+pip install pre-commit
+
+# 2. Add to .pre-commit-config.yaml in your repo
+cat >> .pre-commit-config.yaml <<'EOF'
+repos:
+  - repo: https://github.com/mkarvan/AgentShield
+    rev: v0.5.0
+    hooks:
+      - id: agentshield-scan
+EOF
+
+# 3. Install hooks
+pre-commit install
+
+# 4. Test
+pre-commit run agentshield-scan --all-files
+```
+
+### Files scanned
+
+The hook triggers on: `requirements*.txt`, `Pipfile.lock`, `package.json`, `package-lock.json`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`.
+
+**Exit codes:** `0` = all packages allowed, `1` = one or more blocked (commit aborted).
+
+See [`docs/pre-commit.md`](docs/pre-commit.md) for advanced configuration (custom config path, offline mode, allowlist setup).
+
 ---
 
 ## Offline mode
@@ -897,7 +1111,7 @@ mypy src/agentshield/
 
 | Directory | What's tested | Network needed |
 |-----------|--------------|---------------|
-| `tests/unit/` | Core logic, cache, config, models, response engine, static analysis rules, posture scoring, renderers | No |
+| `tests/unit/` | Core logic, cache, config, models, response engine, static analysis rules, posture scoring, renderers, IPC auth, SBOM | No |
 | `tests/integration/` | Real API calls (OSV, NVD, GitHub Advisory) | Yes |
 | `tests/e2e/` | Full scan pipeline including IPC socket server | No |
 

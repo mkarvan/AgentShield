@@ -75,3 +75,68 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 ## v0.4.0 — Planned
 
 - PyPI publishing (blocked by name conflict — `agentshield` taken by another maintainer)
+
+## v0.5.0 (done)
+
+### License compliance scanning (done)
+
+- `LicensePolicy` config section — four modes: `disabled` (default), `denylist`, `allowlist`, `permissive-only`
+- Default denied list: GPL-2.0, GPL-3.0, AGPL-3.0, SSPL-1.0, EUPL-1.1, OSL-3.0
+- License metadata fetched from PyPI JSON API (Trove classifiers + `info.license`), npm registry, crates.io API
+- SPDX identifier normalization: alias table (GPLv2 → GPL-2.0-only, etc.), OR/AND/WITH expression splitting, Cargo "/" style
+- `Finding` with rule_id `L1.1`: CRITICAL for GPL/AGPL/SSPL, HIGH for LGPL/EUPL/OSL/MPL
+- `--check-licenses` CLI flag on `agentshield scan` — enables denylist mode ad-hoc without editing config
+- `check_licenses` MCP tool parameter for `agentshield_scan`
+- Wired into `scanner._run_checks` alongside other analyzers (runs in parallel via `asyncio.gather`)
+
+### pre-commit hook (done)
+
+- `.pre-commit-hooks.yaml` at repo root — hook id `agentshield-scan`, entry `agentshield scan-file`
+- Triggers on: `requirements*.txt`, `Pipfile.lock`, `package-lock.json`, `package.json`, `Cargo.lock`, `Cargo.toml`, `pyproject.toml`
+- `docs/pre-commit.md` with setup and configuration instructions
+
+## v0.6.0 — Planned
+
+### GitHub Action
+
+- `agentshield-action` — runs `agentshield scan-file` on changed manifest files in a PR
+- Posts a markdown report as a PR comment using the existing Markdown renderer
+
+### Drift detection
+
+- Track ALLOW→BLOCK transitions for packages across scans
+- Surface drift events on next `agentshield scan` or `agentshield posture`
+- Store transition history in SQLite alongside the scan cache
+
+### Agent behavior rate limits
+
+- Per-session limits: max packages per hour, max wheel download size per session
+- Session state persisted in SQLite
+- Configurable via `[rate_limits]` section in `config.toml`
+
+## v0.7.0 — Planned
+
+### Diff scan mode
+
+- `agentshield diff-scan old.txt new.txt` — scan only packages added or changed between two manifest snapshots
+- Useful in CI: scan the delta on a PR rather than the full manifest
+
+### Trust score / reputation system
+
+- Composite score from: PyPI/npm download count, publication age, prior scan history, maintainer account age
+- Surfaces as a `Finding` with rule_id `T5.1` when trust score falls below threshold
+
+### Container / Docker scanning
+
+- Parse `Dockerfile` `RUN pip install` / `RUN npm install` / `RUN cargo install` lines
+- Treat as a virtual manifest and run `scan-file`-style batch scan
+
+### HTTP daemon mode
+
+- `agentshield serve --http` — FastAPI server on `localhost:PORT`, REST API complement to IPC socket
+- Useful for non-Python agent runtimes and web-based dashboards
+
+### `agentshield guard`
+
+- Interactive shell wrapper that intercepts `pip`, `npm`, and `cargo` in real-time
+- Wraps the user's shell; every install command goes through AgentShield before execution

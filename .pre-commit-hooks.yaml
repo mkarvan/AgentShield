@@ -1,0 +1,8 @@
+- id: agentshield-scan
+  name: AgentShield Security Scan
+  description: Scan manifest files for vulnerable or malicious packages before committing.
+  entry: agentshield scan-file
+  language: python
+  types: [file]
+  files: '(requirements.*\.txt|Pipfile\.lock|package-lock\.json|package\.json|Cargo\.lock|Cargo\.toml|pyproject\.toml)$'
+  additional_dependencies: ['agentshield']

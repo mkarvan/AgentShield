@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -74,6 +74,34 @@ class APIConfig(BaseModel):
         return self
 
 
+_DEFAULT_DENIED_LICENSES: list[str] = [
+    "GPL-2.0-only",
+    "GPL-2.0-or-later",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "SSPL-1.0",
+    "EUPL-1.1",
+    "OSL-3.0",
+]
+
+
+class LicensePolicy(BaseModel):
+    """License compliance policy.
+
+    Modes:
+    - ``disabled``       — no license checking (default, opt-in)
+    - ``denylist``       — flag packages whose license is in ``denied``
+    - ``allowlist``      — flag packages whose license is NOT in ``allowed``
+    - ``permissive-only``— flag any copyleft or non-permissive license
+    """
+
+    mode: Literal["disabled", "denylist", "allowlist", "permissive-only"] = "disabled"
+    denied: list[str] = Field(default_factory=lambda: list(_DEFAULT_DENIED_LICENSES))
+    allowed: list[str] = Field(default_factory=list)
+
+
 class Config(BaseModel):
     defaults: SeverityPolicy = Field(default_factory=SeverityPolicy)
     ecosystems: dict[str, SeverityPolicy] = Field(default_factory=dict)
@@ -83,6 +111,7 @@ class Config(BaseModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
     api: APIConfig = Field(default_factory=APIConfig)
+    license_policy: LicensePolicy = Field(default_factory=LicensePolicy)
     offline: bool = False
 
     @model_validator(mode="before")

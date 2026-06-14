@@ -65,6 +65,11 @@ _TOOLS: list[dict[str, Any]] = [
                     "default": 3,
                     "description": "Maximum depth for transitive dependency resolution (1–10).",
                 },
+                "check_licenses": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Check the package license against the configured license policy.",
+                },
             },
             "required": ["package", "ecosystem"],
         },
@@ -244,6 +249,7 @@ class MCPServer:
                 source="mcp",
                 transitive=bool(args.get("transitive", False)),
                 transitive_depth=int(args.get("transitive_depth", 3)),
+                check_licenses=bool(args.get("check_licenses", False)),
             )
             result = await self.shield.ascan(request)
 

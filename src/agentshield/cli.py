@@ -46,6 +46,11 @@ def scan(
     transitive_depth: int = typer.Option(
         3, "--transitive-depth", help="Maximum depth for transitive dependency resolution (1-10)"
     ),
+    check_licenses: bool = typer.Option(
+        False,
+        "--check-licenses",
+        help="Check package license against the configured license policy (default: denylist)",
+    ),
 ) -> None:
     """Scan a package for security vulnerabilities."""
     name, _, version = package.partition("==")
@@ -57,6 +62,7 @@ def scan(
         deep=deep,
         transitive=transitive,
         transitive_depth=transitive_depth,
+        check_licenses=check_licenses,
     )
 
     from agentshield.core.config import Config

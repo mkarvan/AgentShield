@@ -209,7 +209,7 @@ class AgentShield:
         from agentshield.databases.nvd import NVDClient
         from agentshield.databases.osv import OSVClient
 
-        tasks = [
+        tasks: list[Any] = [
             OSVClient().scan(request),
             NVDClient(api_key=self.config.api.nvd_api_key).scan(request),
             GitHubAdvisoryClient(token=self.config.api.github_token).scan(request),
@@ -217,6 +217,16 @@ class AgentShield:
             MaliciousDB().check(request, db_path=self.config.cache.db_path),
         ]
         source_names = ["osv", "nvd", "github_advisory", "typosquatting", "malicious_db"]
+
+        if request.check_licenses or self.config.license_policy.mode != "disabled":
+            from agentshield.analyzers.license_checker import LicenseChecker
+            from agentshield.core.config import LicensePolicy as _LP
+
+            _policy = self.config.license_policy
+            if request.check_licenses and _policy.mode == "disabled":
+                _policy = _LP(mode="denylist")
+            tasks.append(LicenseChecker(_policy).check(request))
+            source_names.append("license_checker")
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

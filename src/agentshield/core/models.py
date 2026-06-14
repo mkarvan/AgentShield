@@ -203,6 +203,7 @@ class ScanRequest(BaseModel):
     deep: bool = False
     transitive: bool = False
     transitive_depth: int = Field(default=3, ge=1, le=10)
+    check_licenses: bool = False
 
     @field_validator("package")
     @classmethod

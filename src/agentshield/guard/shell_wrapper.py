@@ -35,28 +35,28 @@ _BASH_INIT = """\
 
 function pip() {
     if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd "pip $*" || return 1
+        agentshield guard-scan-cmd pip "$@" || return 1
     fi
     command pip "$@"
 }
 
 function pip3() {
     if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd "pip3 $*" || return 1
+        agentshield guard-scan-cmd pip3 "$@" || return 1
     fi
     command pip3 "$@"
 }
 
 function npm() {
     if [[ "$1" == "install" || "$1" == "i" ]]; then
-        agentshield guard-scan-cmd "npm $*" || return 1
+        agentshield guard-scan-cmd npm "$@" || return 1
     fi
     command npm "$@"
 }
 
 function cargo() {
     if [[ "$1" == "add" || "$1" == "install" ]]; then
-        agentshield guard-scan-cmd "cargo $*" || return 1
+        agentshield guard-scan-cmd cargo "$@" || return 1
     fi
     command cargo "$@"
 }
@@ -70,28 +70,28 @@ _ZSH_INIT = """\
 
 function pip() {
     if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd "pip $*" || return 1
+        agentshield guard-scan-cmd pip "$@" || return 1
     fi
     command pip "$@"
 }
 
 function pip3() {
     if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd "pip3 $*" || return 1
+        agentshield guard-scan-cmd pip3 "$@" || return 1
     fi
     command pip3 "$@"
 }
 
 function npm() {
     if [[ "$1" == "install" || "$1" == "i" ]]; then
-        agentshield guard-scan-cmd "npm $*" || return 1
+        agentshield guard-scan-cmd npm "$@" || return 1
     fi
     command npm "$@"
 }
 
 function cargo() {
     if [[ "$1" == "add" || "$1" == "install" ]]; then
-        agentshield guard-scan-cmd "cargo $*" || return 1
+        agentshield guard-scan-cmd cargo "$@" || return 1
     fi
     command cargo "$@"
 }
@@ -105,28 +105,28 @@ _FISH_INIT = """\
 
 function pip
     if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd "pip $argv"; or return 1
+        agentshield guard-scan-cmd pip $argv; or return 1
     end
     command pip $argv
 end
 
 function pip3
     if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd "pip3 $argv"; or return 1
+        agentshield guard-scan-cmd pip3 $argv; or return 1
     end
     command pip3 $argv
 end
 
 function npm
     if test "$argv[1]" = "install"; or test "$argv[1]" = "i"
-        agentshield guard-scan-cmd "npm $argv"; or return 1
+        agentshield guard-scan-cmd npm $argv; or return 1
     end
     command npm $argv
 end
 
 function cargo
     if test "$argv[1]" = "add"; or test "$argv[1]" = "install"
-        agentshield guard-scan-cmd "cargo $argv"; or return 1
+        agentshield guard-scan-cmd cargo $argv; or return 1
     end
     command cargo $argv
 end

@@ -47,7 +47,7 @@ def test_bare_shell_name_works() -> None:
 
 def test_bash_script_wraps_pip() -> None:
     assert "function pip()" in _BASH_INIT
-    assert 'agentshield guard-scan-cmd "pip $*"' in _BASH_INIT
+    assert 'agentshield guard-scan-cmd pip "$@"' in _BASH_INIT
 
 
 def test_bash_script_wraps_pip3() -> None:
@@ -56,12 +56,16 @@ def test_bash_script_wraps_pip3() -> None:
 
 def test_bash_script_wraps_npm() -> None:
     assert "function npm()" in _BASH_INIT
-    assert 'agentshield guard-scan-cmd "npm $*"' in _BASH_INIT
+    assert 'agentshield guard-scan-cmd npm "$@"' in _BASH_INIT
 
 
 def test_bash_script_wraps_cargo() -> None:
     assert "function cargo()" in _BASH_INIT
-    assert 'agentshield guard-scan-cmd "cargo $*"' in _BASH_INIT
+    assert 'agentshield guard-scan-cmd cargo "$@"' in _BASH_INIT
+
+
+def test_bash_uses_dollar_at_not_star() -> None:
+    assert "$*" not in _BASH_INIT
 
 
 def test_bash_script_delegates_to_command() -> None:
@@ -93,6 +97,10 @@ def test_zsh_script_aborts_on_block() -> None:
     assert "|| return 1" in _ZSH_INIT
 
 
+def test_zsh_uses_dollar_at_not_star() -> None:
+    assert "$*" not in _ZSH_INIT
+
+
 # ── fish script content ───────────────────────────────────────────────────────
 
 
@@ -110,6 +118,11 @@ def test_fish_script_wraps_cargo() -> None:
 
 def test_fish_script_aborts_on_block() -> None:
     assert "; or return 1" in _FISH_INIT
+
+
+def test_fish_uses_argv_not_quoted_string() -> None:
+    assert '"pip $argv"' not in _FISH_INIT
+    assert "agentshield guard-scan-cmd pip $argv" in _FISH_INIT
 
 
 # ── guard-scan-cmd integration — via hermes parse ────────────────────────────

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from agentshield.core.models import (
@@ -97,14 +98,12 @@ async def test_scan_invalid_json_returns_400() -> None:
 # ── /scan-file ────────────────────────────────────────────────────────────────
 
 
-async def test_scan_file_returns_aggregate(tmp_path: object) -> None:
-    from pathlib import Path
-
-    reqs = Path(str(tmp_path)) / "requirements.txt"  # type: ignore[arg-type]
+async def test_scan_file_returns_aggregate(tmp_path: Path) -> None:
+    reqs = tmp_path / "requirements.txt"
     reqs.write_text("requests==2.28.0\n")
 
     shield = _make_shield(file_result=_file_result(str(reqs)))
-    server = HTTPServer(shield)
+    server = HTTPServer(shield, allowed_dirs=[tmp_path])
     body_bytes = json.dumps({"path": str(reqs)}).encode()
     code, body = await server._route("POST", "/scan-file", body_bytes)
     assert code == 200
@@ -197,3 +196,57 @@ async def test_scan_scanner_error_returns_500() -> None:
     code, body = await server._route("POST", "/scan", body_bytes)
     assert code == 500
     assert "error" in body
+
+
+# ── path traversal guard ──────────────────────────────────────────────────────
+
+
+def test_validate_path_allows_cwd_child(tmp_path: Path) -> None:
+    server = HTTPServer(MagicMock(), allowed_dirs=[tmp_path])
+    child = tmp_path / "requirements.txt"
+    child.touch()
+    resolved, err = server._validate_path(str(child))
+    assert err is None
+    assert resolved == child.resolve()
+
+
+def test_validate_path_rejects_traversal(tmp_path: Path) -> None:
+    server = HTTPServer(MagicMock(), allowed_dirs=[tmp_path])
+    outside = tmp_path / ".." / "secret.txt"
+    _, err = server._validate_path(str(outside))
+    assert err is not None
+    assert "denied" in err.lower()
+
+
+def test_validate_path_rejects_etc_passwd() -> None:
+    allowed = Path("/tmp/agentshield_test_allowed")
+    server = HTTPServer(MagicMock(), allowed_dirs=[allowed])
+    _, err = server._validate_path("/etc/passwd")
+    assert err is not None
+
+
+async def test_scan_file_path_traversal_returns_403(tmp_path: Path) -> None:
+    server = HTTPServer(MagicMock(), allowed_dirs=[tmp_path])
+    body_bytes = json.dumps({"path": "/etc/passwd"}).encode()
+    code, body = await server._route("POST", "/scan-file", body_bytes)
+    assert code == 403
+    assert "error" in body
+
+
+async def test_sbom_path_traversal_returns_403(tmp_path: Path) -> None:
+    server = HTTPServer(MagicMock(), allowed_dirs=[tmp_path])
+    body_bytes = json.dumps({"path": "/etc/passwd"}).encode()
+    code, body = await server._route("POST", "/sbom", body_bytes)
+    assert code == 403
+    assert "error" in body
+
+
+async def test_scan_file_allowed_path_succeeds(tmp_path: Path) -> None:
+    reqs = tmp_path / "requirements.txt"
+    reqs.write_text("requests==2.28.0\n")
+    shield = _make_shield(file_result=_file_result(str(reqs)))
+    server = HTTPServer(shield, allowed_dirs=[tmp_path])
+    body_bytes = json.dumps({"path": str(reqs)}).encode()
+    code, body = await server._route("POST", "/scan-file", body_bytes)
+    assert code == 200
+    assert "decision" in body

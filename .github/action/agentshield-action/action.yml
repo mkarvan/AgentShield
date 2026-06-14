@@ -47,6 +47,12 @@ inputs:
       Defaults to the built-in GITHUB_TOKEN.
     required: false
     default: ${{ github.token }}
+  version:
+    description: >
+      AgentShield version to install (e.g. '0.7.0').
+      Pin this to get reproducible CI scans.
+    required: false
+    default: '0.7.0'
 
 outputs:
   blocked:
@@ -72,7 +78,7 @@ runs:
 
     - name: Install AgentShield
       shell: bash
-      run: pip install agentshield
+      run: pip install agentshield==${{ inputs.version }}
 
     - name: Find manifest files
       id: find

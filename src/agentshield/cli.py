@@ -623,7 +623,7 @@ def guard(
 
 @app.command("guard-scan-cmd", hidden=True)
 def guard_scan_cmd(
-    command: str = typer.Argument(..., help="Full shell command to scan"),
+    args: list[str] = typer.Argument(..., help="Command tokens to scan (e.g. pip install pkg)"),
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
 ) -> None:
     """Internal command used by agentshield guard shell wrappers.
@@ -631,12 +631,15 @@ def guard_scan_cmd(
     Scans all packages detected in a shell install command.
     Exits 0 if safe, 1 if any package is blocked.
     """
+    import shlex
+
     from agentshield.core.config import Config
     from agentshield.integrations.hermes.plugin import (
         _find_shell_suspicions,
         _parse_shell_packages,
     )
 
+    command = shlex.join(args)
     err_console = Console(stderr=True)
     cfg = Config.load(config)
     shield = AgentShield(config=cfg)

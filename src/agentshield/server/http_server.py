@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 _STATUS_TEXT = {
     200: "OK",
     400: "Bad Request",
+    403: "Forbidden",
     404: "Not Found",
     500: "Internal Server Error",
 }
@@ -41,10 +43,14 @@ class HTTPServer:
         shield: Any,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
+        allowed_dirs: list[Path] | None = None,
     ) -> None:
         self.shield = shield
         self.host = host
         self.port = port
+        self.allowed_dirs: list[Path] = (
+            allowed_dirs if allowed_dirs is not None else [Path.cwd(), Path.home()]
+        )
 
     async def start(self) -> None:
         """Start the server and serve requests until cancelled."""
@@ -122,6 +128,23 @@ class HTTPServer:
             logger.exception("Unhandled error in %s %s", method, path)
             return 500, {"error": str(exc)}
 
+    # ── path validation ───────────────────────────────────────────────────────
+
+    def _validate_path(self, path_str: str) -> tuple[Path, str | None]:
+        """Resolve *path_str* and verify it is inside an allowed directory.
+
+        Returns ``(resolved_path, None)`` on success or ``(resolved_path,
+        error_message)`` when the path escapes every allowed directory.
+        """
+        path = Path(path_str).resolve()
+        for allowed in self.allowed_dirs:
+            try:
+                if path.is_relative_to(allowed.resolve()):
+                    return path, None
+            except ValueError:
+                continue
+        return path, "Access denied: path is outside allowed directories"
+
     # ── handlers ──────────────────────────────────────────────────────────────
 
     async def _handle_scan(self, args: dict[str, Any]) -> tuple[int, Any]:
@@ -183,15 +206,17 @@ class HTTPServer:
             return 500, {"error": str(exc)}
 
     async def _handle_scan_file(self, args: dict[str, Any]) -> tuple[int, Any]:
-        from pathlib import Path
-
         try:
             path_str = args["path"]
         except KeyError:
             return 400, {"error": "Missing required field: 'path'"}
 
+        resolved, err = self._validate_path(path_str)
+        if err:
+            return 403, {"error": err}
+
         try:
-            result = await self.shield.ascan_file(Path(path_str))
+            result = await self.shield.ascan_file(resolved)
             return 200, {
                 "decision": result.aggregate_decision.action.value,
                 "reason": result.aggregate_decision.reason,
@@ -217,8 +242,6 @@ class HTTPServer:
             return 500, {"error": str(exc)}
 
     async def _handle_sbom(self, args: dict[str, Any]) -> tuple[int, Any]:
-        from pathlib import Path
-
         from agentshield.core.sbom import generate_sbom_json
 
         try:
@@ -226,8 +249,12 @@ class HTTPServer:
         except KeyError:
             return 400, {"error": "Missing required field: 'path'"}
 
+        resolved, err = self._validate_path(path_str)
+        if err:
+            return 403, {"error": err}
+
         try:
-            result = await self.shield.ascan_file(Path(path_str))
+            result = await self.shield.ascan_file(resolved)
             sbom_text = generate_sbom_json(result.results, source_path=path_str)
             return 200, json.loads(sbom_text)
         except Exception as exc:

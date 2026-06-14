@@ -222,21 +222,21 @@ def posture(
             output.write_text(text)
             console.print(f"[green]JSON report written to {output}[/green]")
         else:
-            console.print(text)
+            print(text)
     elif fmt == "html":
         text = render_html(report)
         if output:
             output.write_text(text)
             console.print(f"[green]HTML report written to {output}[/green]")
         else:
-            console.print(text)
+            print(text)
     elif fmt == "markdown":
         text = render_markdown(report)
         if output:
             output.write_text(text)
             console.print(f"[green]Markdown report written to {output}[/green]")
         else:
-            console.print(text)
+            print(text)
     else:
         console.print(f"[red]Unknown format: {fmt!r}[/red]")
         console.print("Available formats: terminal | json | html | markdown")
@@ -444,7 +444,7 @@ def sbom(
         output.write_text(sbom_text)
         console.print(f"[green]SBOM written to {output}[/green]")
     else:
-        console.print(sbom_text)
+        print(sbom_text)
 
     if file_result.aggregate_decision.action == DecisionAction.BLOCK:
         raise typer.Exit(code=1)
@@ -487,7 +487,7 @@ def drift_check(
             }
             for pkg, eco, f in drift_results
         ]
-        console.print(_json.dumps(output, indent=2))
+        print(_json.dumps(output, indent=2))
         return
 
     if not drift_results:

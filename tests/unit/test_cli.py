@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from agentshield.cli import app
 
 OSV_URL = "https://api.osv.dev/v1/query"
+NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 runner = CliRunner()
 
 
@@ -79,6 +80,7 @@ def test_scan_critical_vuln_exits_1(tmp_path):
 def test_scan_parses_package_version(tmp_path):
     """Verify that 'name==version' is parsed correctly."""
     respx.post(OSV_URL).mock(return_value=Response(200, json={"vulns": []}))
+    respx.get(NVD_URL).mock(return_value=Response(200, json={"vulnerabilities": []}))
     with patch("agentshield.analyzers.typosquatting.TyposquattingChecker._load", return_value=[]):
         result = runner.invoke(
             app,
@@ -173,6 +175,21 @@ def test_cache_unknown_action(tmp_path):
 def test_posture_command_runs():
     result = runner.invoke(app, ["posture"])
     assert result.exit_code == 0
+
+
+def test_posture_json_format_is_valid_json():
+    """posture --format json must produce parseable JSON even when descriptions contain newlines."""
+    import json
+
+    result = runner.invoke(app, ["posture", "--format", "json", "--skip-packages"])
+    assert result.exit_code == 0
+    # Extract the JSON object from the output (ignoring any leading/trailing log noise).
+    start = result.output.find("{")
+    end = result.output.rfind("}") + 1
+    assert start != -1, f"No JSON object found in output: {result.output!r}"
+    parsed = json.loads(result.output[start:end])
+    assert "risk_score" in parsed
+    assert "critical_count" in parsed
 
 
 # ── help ──────────────────────────────────────────────────────────────────────

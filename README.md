@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![v0.6.0](https://img.shields.io/badge/version-0.6.0-brightgreen)](#)
+[![v0.7.0](https://img.shields.io/badge/version-0.7.0-brightgreen)](#)
 
 ---
 
@@ -46,6 +46,11 @@ AgentShield sits between the agent's intent ("install X") and the system executi
 - [GitHub Action](#github-action)
 - [Drift detection](#drift-detection)
 - [Rate limits](#rate-limits)
+- [Diff scan mode](#diff-scan-mode)
+- [Trust score / reputation system](#trust-score--reputation-system)
+- [Container / Docker scanning](#container--docker-scanning)
+- [HTTP daemon mode](#http-daemon-mode)
+- [agentshield guard](#agentshield-guard)
 - [Offline mode](#offline-mode)
 - [Caching](#caching)
 - [Contributing](#contributing)
@@ -1125,6 +1130,127 @@ Session state is stored in SQLite and identified by the `AGENTSHIELD_SESSION_ID`
 | Variable | Purpose |
 |----------|---------|
 | `AGENTSHIELD_SESSION_ID` | Override the session ID (useful in multi-process setups) |
+
+---
+
+## Diff scan mode
+
+Scan only the packages that changed between two manifest snapshots — useful in CI to scan just the PR delta rather than the full manifest.
+
+```bash
+agentshield diff-scan old-requirements.txt new-requirements.txt
+agentshield diff-scan old-package.json new-package.json
+```
+
+Each package is classified as:
+
+| Category | Scanned? | Description |
+|----------|----------|-------------|
+| **added** | Yes | Present in new manifest, absent in old |
+| **upgraded** | Yes | Same package, different version |
+| **removed** | Listed only | Present in old, absent in new |
+| **unchanged** | Skipped | Same package + version in both |
+
+The command exits with code 1 if any added or upgraded package is blocked.
+
+**MCP tool:** `agentshield_diff_scan` with `old_path` and `new_path` arguments.
+
+---
+
+## Trust score / reputation system
+
+Every scan now includes a 0–100 trust score reflecting a package's reputation based on publicly available signals.
+
+| Score | Label | Finding |
+|-------|-------|---------|
+| 80–100 | high-trust | None |
+| 50–79 | moderate | None |
+| 20–49 | low-trust | T5.1 HIGH |
+| 0–19 | suspicious | T5.1 CRITICAL |
+
+### Signals used
+
+- **PyPI:** publication age, release count, metadata completeness (homepage, summary, author), monthly download count via pypistats.org
+- **npm:** creation date, version count, maintainer count, monthly download count via npm downloads API
+- **crates.io:** creation date, version count, total download count
+- **Scan history:** past BLOCK decisions in local AgentShield DB penalise the score
+
+Trust score computation runs concurrently with other checks and never blocks or delays a scan result — if the registry is unreachable the score is omitted (`null`).
+
+The score is included in all output formats: terminal (`Trust: 87/100 (high-trust)`), JSON (`"trust_score": 87`), MCP tool results, and HTTP API responses.
+
+---
+
+## Container / Docker scanning
+
+Scan packages referenced in a `Dockerfile`'s `RUN` install commands:
+
+```bash
+agentshield scan-docker Dockerfile
+agentshield scan-docker path/to/Dockerfile
+```
+
+Supported patterns inside `RUN` instructions:
+
+| Pattern | Ecosystem |
+|---------|-----------|
+| `pip install …`, `pip3 install …`, `python -m pip install …`, `uv pip install …` | PyPI |
+| `npm install …`, `npm i …`, `yarn add …` | npm |
+| `cargo add …`, `cargo install …` | Cargo |
+
+Both shell form (`RUN pip install foo`) and exec form (`RUN ["pip", "install", "foo"]`) are supported. Backslash-newline continuations are handled. Duplicate packages across multiple `RUN` instructions are deduplicated.
+
+**MCP tool:** `agentshield_scan_docker` with a `path` argument.
+
+---
+
+## HTTP daemon mode
+
+Run AgentShield as an HTTP REST API server on localhost:
+
+```bash
+agentshield serve --http             # default port 8765
+agentshield serve --http --port 9000
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness probe — returns `{"status": "ok"}` |
+| `POST` | `/scan` | Scan a single package (same request body as MCP `agentshield_scan`) |
+| `POST` | `/scan-file` | Scan a manifest file — `{"path": "/abs/path/to/requirements.txt"}` |
+| `GET` | `/posture` | Generate a security posture report |
+| `POST` | `/sbom` | Generate a CycloneDX SBOM — `{"path": "/abs/path/to/manifest"}` |
+
+All responses are JSON. Errors return `{"error": "..."}` with the appropriate HTTP status code.
+
+The HTTP server uses Python's asyncio stdlib — no extra dependencies required.
+
+---
+
+## agentshield guard
+
+Start an interactive shell session where `pip`, `npm`, and `cargo` install commands are intercepted before execution:
+
+```bash
+agentshield guard              # wraps $SHELL (bash, zsh, or fish)
+agentshield guard --shell zsh  # wrap a specific shell
+```
+
+Inside the guarded shell, the package manager commands are shadowed by wrapper functions. Any `pip install`, `npm install`, or `cargo add`/`cargo install` calls `agentshield guard-scan-cmd` first — if AgentShield blocks the package, the install is aborted and the error is printed before the command runs.
+
+```
+[AgentShield Guard] Active — pip, npm, and cargo install commands are protected.
+[guard] $ pip install evil-pkg
+AgentShield BLOCKED 1 package(s):
+  • evil-pkg: malicious package detected
+[guard] $     ← install was aborted
+```
+
+Supported shells: **bash**, **zsh**, **fish** (defaults to bash-compatible for others).
+
+Exit the guarded shell normally (`exit` or Ctrl-D) to return to your regular session.
 
 ---
 

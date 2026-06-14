@@ -127,29 +127,47 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - Rate limit check inserted in `scanner.py` between cache lookup and network checks
 - 11 unit tests in `tests/unit/test_rate_limiter.py`
 
-## v0.7.0 — Planned
+## v0.7.0 (done)
 
-### Diff scan mode
+### Diff scan mode (done)
 
 - `agentshield diff-scan old.txt new.txt` — scan only packages added or changed between two manifest snapshots
-- Useful in CI: scan the delta on a PR rather than the full manifest
+- `compute_delta()` in `diff_scanner.py` classifies each package as added/upgraded/removed/unchanged
+- Only added and upgraded packages are scanned; removed and unchanged are listed without scanning
+- `agentshield_diff_scan` MCP tool mirrors the CLI behaviour
+- 16 unit tests in `tests/unit/test_diff_scanner.py`
 
-### Trust score / reputation system
+### Trust score / reputation system (done)
 
-- Composite score from: PyPI/npm download count, publication age, prior scan history, maintainer account age
-- Surfaces as a `Finding` with rule_id `T5.1` when trust score falls below threshold
+- `src/agentshield/analyzers/trust_score.py` — `TrustScoreResult` dataclass + `compute_trust_score()` coroutine
+- Signals: PyPI/npm download count (via pypistats.org / npm downloads API), publication age, release count, metadata completeness, maintainer count (npm), prior BLOCK decisions from local scan history
+- Score 0–100; labels: "high-trust" (80+), "moderate" (50–79), "low-trust" (20–49), "suspicious" (0–19)
+- T5.1 Finding emitted when score < 50 (HIGH) or score < 20 (CRITICAL)
+- `trust_score` and `trust_label` fields added to `ScanResult`; surfaced in CLI, MCP, and HTTP responses
+- Runs concurrently with main scan checks via `asyncio.gather`; failures are silently swallowed (never blocks a scan)
+- 14 unit tests in `tests/unit/test_trust_score.py`
 
-### Container / Docker scanning
+### Container / Docker scanning (done)
 
-- Parse `Dockerfile` `RUN pip install` / `RUN npm install` / `RUN cargo install` lines
-- Treat as a virtual manifest and run `scan-file`-style batch scan
+- `src/agentshield/analyzers/dockerfile_scanner.py` — `parse_dockerfile()` extracts packages from `RUN` instructions
+- Reuses `_INSTALL_PATTERNS` and `_tokenize_packages` from the Hermes plugin
+- Supports shell form (`RUN pip install foo`) and exec form (`RUN ["pip", "install", "foo"]`)
+- Collapses backslash-newline continuations before parsing; deduplicates by (name, ecosystem)
+- `agentshield scan-docker Dockerfile` CLI command; `agentshield_scan_docker` MCP tool
+- 17 unit tests in `tests/unit/test_dockerfile_scanner.py`
 
-### HTTP daemon mode
+### HTTP daemon mode (done)
 
-- `agentshield serve --http` — FastAPI server on `localhost:PORT`, REST API complement to IPC socket
-- Useful for non-Python agent runtimes and web-based dashboards
+- `src/agentshield/server/http_server.py` — minimal asyncio HTTP/1.1 server (no extra dependencies)
+- Endpoints: `GET /health`, `POST /scan`, `POST /scan-file`, `GET /posture`, `POST /sbom`
+- Activated with `agentshield serve --http [--port 8765]`
+- Responses include `trust_score` and `trust_label` from `ScanResult`
+- 16 unit tests in `tests/unit/test_http_server.py`
 
-### `agentshield guard`
+### `agentshield guard` (done)
 
-- Interactive shell wrapper that intercepts `pip`, `npm`, and `cargo` in real-time
-- Wraps the user's shell; every install command goes through AgentShield before execution
+- `src/agentshield/guard/shell_wrapper.py` — `ShellGuard` class generates shell init scripts for bash, zsh, fish
+- Wrapper functions shadow `pip`, `pip3`, `npm`, `cargo`; each calls `agentshield guard-scan-cmd "<cmd>"` before delegating to `command <bin>`
+- `guard-scan-cmd` is a hidden CLI command that parses the shell command (reuses hermes `_parse_shell_packages`), scans all detected packages, and exits 1 if any are blocked
+- `agentshield guard [--shell zsh]` CLI command launches the wrapped shell session
+- 24 unit tests in `tests/unit/test_shell_wrapper.py`

@@ -501,19 +501,209 @@ async def _cmd_drift_check(shield: AgentShield, cfg: object) -> list[tuple[str, 
     return out
 
 
+@app.command("diff-scan")
+def diff_scan(
+    old_manifest: Path = typer.Argument(..., help="Old manifest file"),
+    new_manifest: Path = typer.Argument(..., help="New manifest file"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+) -> None:
+    """Scan only packages that changed between two manifest snapshots.
+
+    \b
+    agentshield diff-scan old-requirements.txt new-requirements.txt
+    agentshield diff-scan old-package.json new-package.json
+    """
+    from agentshield.analyzers.diff_scanner import run_diff_scan
+    from agentshield.core.config import Config
+
+    cfg = Config.load(config)
+    shield = AgentShield(config=cfg)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[cyan]Computing diff and scanning changed packages…[/cyan]"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("diff-scan", total=None)
+        result = asyncio.run(run_diff_scan(shield, old_manifest, new_manifest))
+
+    _print_diff_result(result)
+
+    if result.aggregate_decision.action == DecisionAction.BLOCK:
+        raise typer.Exit(code=1)
+
+
+@app.command("scan-docker")
+def scan_docker(
+    dockerfile: Path = typer.Argument(..., help="Path to Dockerfile"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+    offline: bool = typer.Option(False, "--offline", help="Use only local DB — no network calls"),
+) -> None:
+    """Scan packages from RUN pip/npm/cargo install commands in a Dockerfile.
+
+    \b
+    agentshield scan-docker Dockerfile
+    agentshield scan-docker path/to/Dockerfile
+    """
+    from agentshield.analyzers.dockerfile_scanner import parse_dockerfile
+    from agentshield.core.config import Config
+
+    cfg = Config.load(config)
+    if offline:
+        cfg = cfg.model_copy(update={"offline": True})
+
+    shield = AgentShield(config=cfg)
+
+    requests_list = parse_dockerfile(dockerfile)
+    if not requests_list:
+        console.print("[yellow]No package install commands found in Dockerfile.[/yellow]")
+        return
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn(f"[cyan]Scanning {len(requests_list)} package(s) from Dockerfile…[/cyan]"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("scan-docker", total=None)
+
+        async def _run() -> FileScanResult:
+            import asyncio as _asyncio
+
+            _CONCURRENCY = 10
+            sem = _asyncio.Semaphore(_CONCURRENCY)
+
+            async def _one(req: ScanRequest) -> ScanResult:
+                async with sem:
+                    return await shield.ascan(req)
+
+            raw = await _asyncio.gather(*[_one(r) for r in requests_list], return_exceptions=True)
+            results: list[ScanResult] = []
+            for i, r in enumerate(raw):
+                if isinstance(r, ScanResult):
+                    results.append(r)
+                elif isinstance(r, Exception):
+                    console.print(
+                        f"[yellow]Scan failed for {requests_list[i].package}: {r}[/yellow]"
+                    )
+            return FileScanResult.from_results(dockerfile, results)
+
+        result = asyncio.run(_run())
+
+    _print_file_result(result)
+
+    if result.aggregate_decision.action == DecisionAction.BLOCK:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def guard(
+    shell: str | None = typer.Option(
+        None, "--shell", help="Shell to wrap (default: $SHELL or bash)"
+    ),
+) -> None:
+    """Start an interactive shell with package install interception.
+
+    Wraps pip, npm, and cargo — any install command is scanned by AgentShield
+    before it runs.  Exit the guarded shell normally to return to your session.
+
+    \b
+    agentshield guard
+    agentshield guard --shell zsh
+    """
+    from agentshield.guard.shell_wrapper import ShellGuard
+
+    guard_instance = ShellGuard()
+    exit_code = guard_instance.start(shell=shell)
+    raise typer.Exit(code=exit_code)
+
+
+@app.command("guard-scan-cmd", hidden=True)
+def guard_scan_cmd(
+    command: str = typer.Argument(..., help="Full shell command to scan"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+) -> None:
+    """Internal command used by agentshield guard shell wrappers.
+
+    Scans all packages detected in a shell install command.
+    Exits 0 if safe, 1 if any package is blocked.
+    """
+    from agentshield.core.config import Config
+    from agentshield.integrations.hermes.plugin import (
+        _find_shell_suspicions,
+        _parse_shell_packages,
+    )
+
+    err_console = Console(stderr=True)
+    cfg = Config.load(config)
+    shield = AgentShield(config=cfg)
+
+    suspicions = _find_shell_suspicions(command)
+    if suspicions:
+        err_console.print("[red]AgentShield: cannot verify package source:[/red]")
+        for s in suspicions:
+            err_console.print(f"  • {s}")
+        raise typer.Exit(code=1)
+
+    pkg_list = _parse_shell_packages(command)
+    if not pkg_list:
+        return  # no packages detected, allow
+
+    requests_list = [
+        ScanRequest(package=pkg, ecosystem=eco, source="guard") for pkg, eco in pkg_list
+    ]
+
+    async def _run() -> list[ScanResult]:
+        results = []
+        for req in requests_list:
+            results.append(await shield.ascan(req))
+        return results
+
+    results = asyncio.run(_run())
+
+    blocked = [r for r in results if r.decision.action == DecisionAction.BLOCK]
+    warned = [
+        r
+        for r in results
+        if r.decision.action in (DecisionAction.NEEDS_CONFIRMATION, DecisionAction.LOG_ASYNC)
+    ]
+
+    if warned:
+        console.print(
+            f"[yellow]AgentShield: {len(warned)} package(s) flagged for review[/yellow]",
+        )
+        for r in warned:
+            console.print(f"  • {r.request.package}: {r.decision.reason}")
+
+    if blocked:
+        console.print(
+            f"[red]AgentShield BLOCKED {len(blocked)} package(s):[/red]",
+        )
+        for r in blocked:
+            console.print(f"  • {r.request.package}: {r.decision.reason}")
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def serve(
     mcp: bool = typer.Option(False, "--mcp", help="Run as MCP tool server (stdio transport)"),
+    http: bool = typer.Option(False, "--http", help="Run as HTTP REST server on localhost"),
     socket: Path | None = typer.Option(
         None, "--socket", help="Unix socket path (default: ~/.agentshield/agentshield.sock)"
     ),
+    port: int = typer.Option(8765, "--port", "-p", help="Port for HTTP server (default: 8765)"),
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
 ) -> None:
     """Start the AgentShield daemon.
 
     \b
-    agentshield serve           Unix socket JSON-RPC IPC server
-    agentshield serve --mcp     MCP tool server on stdio (for MCP-compatible agents)
+    agentshield serve              Unix socket JSON-RPC IPC server
+    agentshield serve --mcp        MCP tool server on stdio
+    agentshield serve --http       HTTP REST server on localhost:8765
+    agentshield serve --http --port 9000
     """
     from agentshield.core.config import Config
 
@@ -529,6 +719,15 @@ def serve(
         Console(stderr=True).print("[dim]AgentShield MCP server starting on stdio...[/dim]")
         with contextlib.suppress(KeyboardInterrupt):
             asyncio.run(server.run_stdio())
+    elif http:
+        from agentshield.server.http_server import HTTPServer
+
+        http_server = HTTPServer(shield, port=port)
+        console.print(f"[dim]AgentShield HTTP server starting on http://127.0.0.1:{port} …[/dim]")
+        try:
+            asyncio.run(http_server.start())
+        except KeyboardInterrupt:
+            console.print("\n[dim]AgentShield HTTP server stopped.[/dim]")
     else:
         from agentshield.server.ipc import DEFAULT_SOCK_PATH, IPCServer
 
@@ -539,6 +738,75 @@ def serve(
             asyncio.run(server_ipc.start())
         except KeyboardInterrupt:
             console.print("\n[dim]AgentShield IPC server stopped.[/dim]")
+
+
+def _print_diff_result(result: object) -> None:
+    from agentshield.analyzers.diff_scanner import DiffScanResult
+
+    r: DiffScanResult = result  # type: ignore[assignment]
+    action = r.aggregate_decision.action
+    color = {
+        DecisionAction.ALLOW: "green",
+        DecisionAction.LOG_ASYNC: "cyan",
+        DecisionAction.NEEDS_CONFIRMATION: "yellow",
+        DecisionAction.BLOCK: "red",
+    }.get(action, "white")
+
+    console.print(f"\n[bold {color}]{action.value}[/bold {color}] — {r.aggregate_decision.reason}")
+    console.print(
+        f"  Old: {r.old_path}  |  New: {r.new_path}\n"
+        f"  Added: [cyan]{len(r.added_results)}[/cyan]"
+        f"  |  Upgraded: [cyan]{len(r.upgraded_results)}[/cyan]"
+        f"  |  Removed: [dim]{len(r.removed)}[/dim]"
+        f"  |  Unchanged: [dim]{len(r.unchanged)}[/dim]\n"
+    )
+
+    if r.added_results or r.upgraded_results:
+        table = Table(title="Changed Package Scan Results", show_header=True)
+        table.add_column("Change", style="bold")
+        table.add_column("Package", style="bold")
+        table.add_column("Old Ver", style="dim")
+        table.add_column("New Ver", style="dim")
+        table.add_column("Status")
+        table.add_column("Max Severity")
+        table.add_column("Findings", justify="right", style="dim")
+
+        def _add_rows(scan_results: list[ScanResult], change_label: str) -> None:
+            for sr in scan_results:
+                a = sr.decision.action
+                sev = sr.max_severity.value
+                status_color = {
+                    DecisionAction.ALLOW: "green",
+                    DecisionAction.LOG_ASYNC: "cyan",
+                    DecisionAction.NEEDS_CONFIRMATION: "yellow",
+                    DecisionAction.BLOCK: "red",
+                }.get(a, "white")
+                sev_color = {
+                    "CRITICAL": "red",
+                    "HIGH": "orange3",
+                    "MEDIUM": "yellow",
+                    "LOW": "cyan",
+                    "INFO": "dim",
+                    "NONE": "dim",
+                }.get(sev, "white")
+                table.add_row(
+                    f"[cyan]{change_label}[/cyan]",
+                    sr.request.package,
+                    "—",
+                    sr.request.version or "latest",
+                    f"[{status_color}]{a.value}[/{status_color}]",
+                    f"[{sev_color}]{sev}[/{sev_color}]",
+                    str(len(sr.findings)),
+                )
+
+        _add_rows(r.added_results, "added")
+        _add_rows(r.upgraded_results, "upgraded")
+        console.print(table)
+
+    if r.removed:
+        console.print("\n[dim]Removed packages (not scanned):[/dim]")
+        for d in r.removed:
+            console.print(f"  • {d.package} ({d.version or 'any'}) [{d.ecosystem.value}]")
 
 
 def _print_file_result(result: FileScanResult) -> None:
@@ -654,9 +922,14 @@ def _print_result(result: ScanResult, wall_ms: int | None = None) -> None:
         f"{wall_ms}ms (wall)" if wall_ms is not None else f"{result.scan_duration_ms}ms"
     )
     console.print(f"\n[bold {color}]{action.value}[/bold {color}] — {result.decision.reason}")
+    trust_display = (
+        f"  |  Trust: {result.trust_score}/100 ({result.trust_label})"
+        if result.trust_score is not None
+        else ""
+    )
     console.print(
         f"  Cache hit: {result.cache_hit}  |  Duration: {duration_display}"
-        f"  |  Max severity: {result.max_severity.value}\n"
+        f"  |  Max severity: {result.max_severity.value}{trust_display}\n"
     )
 
     if result.findings:

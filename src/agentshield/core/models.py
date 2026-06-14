@@ -248,6 +248,8 @@ class ScanResult(BaseModel):
     cache_hit: bool = False
     scanned_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     transitive_results: list[ScanResult] = Field(default_factory=list)
+    trust_score: int | None = None
+    trust_label: str | None = None
 
     @model_validator(mode="after")
     def _check_max_severity_consistent(self) -> ScanResult:

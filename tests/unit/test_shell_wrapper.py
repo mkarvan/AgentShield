@@ -1,0 +1,185 @@
+"""Unit tests for guard/shell_wrapper.py."""
+
+from __future__ import annotations
+
+import pytest
+
+from agentshield.guard.shell_wrapper import (
+    ShellGuard,
+    _BASH_INIT,
+    _FISH_INIT,
+    _ZSH_INIT,
+)
+
+
+# ── generate_guard_script ─────────────────────────────────────────────────────
+
+
+def test_bash_script_returned_for_bash() -> None:
+    guard = ShellGuard()
+    script = guard.generate_guard_script("/bin/bash")
+    assert script == _BASH_INIT
+
+
+def test_zsh_script_returned_for_zsh() -> None:
+    guard = ShellGuard()
+    script = guard.generate_guard_script("/bin/zsh")
+    assert script == _ZSH_INIT
+
+
+def test_fish_script_returned_for_fish() -> None:
+    guard = ShellGuard()
+    script = guard.generate_guard_script("/usr/bin/fish")
+    assert script == _FISH_INIT
+
+
+def test_unknown_shell_defaults_to_bash() -> None:
+    guard = ShellGuard()
+    script = guard.generate_guard_script("/usr/bin/sh")
+    assert script == _BASH_INIT
+
+
+def test_bare_shell_name_works() -> None:
+    guard = ShellGuard()
+    assert guard.generate_guard_script("bash") == _BASH_INIT
+    assert guard.generate_guard_script("zsh") == _ZSH_INIT
+
+
+# ── bash script content ───────────────────────────────────────────────────────
+
+
+def test_bash_script_wraps_pip() -> None:
+    assert "function pip()" in _BASH_INIT
+    assert 'agentshield guard-scan-cmd "pip $*"' in _BASH_INIT
+
+
+def test_bash_script_wraps_pip3() -> None:
+    assert "function pip3()" in _BASH_INIT
+
+
+def test_bash_script_wraps_npm() -> None:
+    assert "function npm()" in _BASH_INIT
+    assert 'agentshield guard-scan-cmd "npm $*"' in _BASH_INIT
+
+
+def test_bash_script_wraps_cargo() -> None:
+    assert "function cargo()" in _BASH_INIT
+    assert 'agentshield guard-scan-cmd "cargo $*"' in _BASH_INIT
+
+
+def test_bash_script_delegates_to_command() -> None:
+    assert "command pip" in _BASH_INIT
+    assert "command npm" in _BASH_INIT
+    assert "command cargo" in _BASH_INIT
+
+
+def test_bash_script_checks_install_subcommand() -> None:
+    assert '"install"' in _BASH_INIT or "== install" in _BASH_INIT
+
+
+def test_bash_script_aborts_on_block() -> None:
+    assert "|| return 1" in _BASH_INIT
+
+
+# ── zsh script content ────────────────────────────────────────────────────────
+
+
+def test_zsh_script_wraps_pip() -> None:
+    assert "function pip()" in _ZSH_INIT
+
+
+def test_zsh_script_wraps_cargo() -> None:
+    assert "function cargo()" in _ZSH_INIT
+
+
+def test_zsh_script_aborts_on_block() -> None:
+    assert "|| return 1" in _ZSH_INIT
+
+
+# ── fish script content ───────────────────────────────────────────────────────
+
+
+def test_fish_script_wraps_pip() -> None:
+    assert "function pip" in _FISH_INIT
+
+
+def test_fish_script_wraps_npm() -> None:
+    assert "function npm" in _FISH_INIT
+
+
+def test_fish_script_wraps_cargo() -> None:
+    assert "function cargo" in _FISH_INIT
+
+
+def test_fish_script_aborts_on_block() -> None:
+    assert "; or return 1" in _FISH_INIT
+
+
+# ── guard-scan-cmd integration — via hermes parse ────────────────────────────
+
+
+def test_hermes_parse_used_for_guard() -> None:
+    from agentshield.integrations.hermes.plugin import _parse_shell_packages
+    from agentshield.core.models import Ecosystem
+
+    pkgs = _parse_shell_packages("pip install requests flask")
+    assert ("requests", Ecosystem.PYPI) in pkgs
+    assert ("flask", Ecosystem.PYPI) in pkgs
+
+
+def test_hermes_parse_npm_for_guard() -> None:
+    from agentshield.integrations.hermes.plugin import _parse_shell_packages
+    from agentshield.core.models import Ecosystem
+
+    pkgs = _parse_shell_packages("npm install lodash")
+    assert ("lodash", Ecosystem.NPM) in pkgs
+
+
+def test_hermes_parse_cargo_for_guard() -> None:
+    from agentshield.integrations.hermes.plugin import _parse_shell_packages
+    from agentshield.core.models import Ecosystem
+
+    pkgs = _parse_shell_packages("cargo add serde")
+    assert ("serde", Ecosystem.CARGO) in pkgs
+
+
+# ── _write_temp_script ────────────────────────────────────────────────────────
+
+
+def test_write_temp_script_creates_file() -> None:
+    import os
+
+    guard = ShellGuard()
+    path = guard._write_temp_script("echo hello\n")
+    try:
+        assert os.path.exists(path)
+        with open(path) as f:
+            assert "echo hello" in f.read()
+    finally:
+        os.unlink(path)
+
+
+def test_write_temp_script_fish_suffix() -> None:
+    import os
+
+    guard = ShellGuard()
+    path = guard._write_temp_script("# fish\n", suffix=".fish")
+    try:
+        assert path.endswith(".fish")
+    finally:
+        os.unlink(path)
+
+
+# ── guard announcement ────────────────────────────────────────────────────────
+
+
+def test_guard_active_message_in_bash() -> None:
+    assert "AgentShield Guard" in _BASH_INIT
+
+
+def test_guard_active_message_in_zsh() -> None:
+    assert "AgentShield Guard" in _ZSH_INIT
+
+
+def test_guard_active_message_in_fish() -> None:
+    assert "AgentShield Guard" in _FISH_INIT

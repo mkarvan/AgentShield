@@ -132,11 +132,20 @@ class AgentShield:
                 cache_hit=False,
             )
 
-        # Run checks (online or offline depending on config)
+        # Run checks and trust score concurrently (trust score skipped in offline mode)
+        from agentshield.analyzers.trust_score import TrustScoreResult, compute_trust_score
+
         if self.config.offline:
             findings = await self._run_offline_checks(request)
+            trust_result: TrustScoreResult | None = None
         else:
-            findings = await self._run_checks(request)
+            checks_coro = self._run_checks(request)
+            trust_coro = compute_trust_score(request, db_path=self.config.cache.db_path)
+            findings_raw, trust_raw = await asyncio.gather(
+                checks_coro, trust_coro, return_exceptions=True
+            )
+            findings = findings_raw if isinstance(findings_raw, list) else []
+            trust_result = trust_raw if isinstance(trust_raw, TrustScoreResult) else None
 
         # T4.1 heuristic: detect prompt-injected install requests (local, no I/O)
         from agentshield.analyzers.prompt_injection import check_prompt_injection
@@ -161,6 +170,12 @@ class AgentShield:
         if drift_findings:
             findings = _dedupe_findings(findings + drift_findings)
 
+        # Fold trust-score finding into the findings list if below threshold
+        if trust_result is not None:
+            ts_finding = trust_result.to_finding(request)
+            if ts_finding is not None:
+                findings = _dedupe_findings(findings + [ts_finding])
+
         max_sev = _max_severity(findings)
         decision = self.response_engine.decide(findings, request)
 
@@ -171,6 +186,8 @@ class AgentShield:
             decision=decision,
             scan_duration_ms=int((time.monotonic() - start) * 1000),
             cache_hit=False,
+            trust_score=trust_result.score if trust_result is not None else None,
+            trust_label=trust_result.label if trust_result is not None else None,
         )
         await self.cache.set(request, result)
 

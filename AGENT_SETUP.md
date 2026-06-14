@@ -60,7 +60,7 @@ pip install "agentshield[all] @ git+https://github.com/mkarvan/AgentShield.git"
 ```bash
 agentshield --version
 ```
-Expected output: `agentshield, version 0.6.0` (or higher).
+Expected output: `agentshield, version 0.7.0` (or higher).
 
 If `agentshield` is not found, the pip bin directory may not be on PATH. Try:
 ```bash
@@ -380,6 +380,8 @@ Expected response: JSON with `"decision": "ALLOW"` and an empty or populated fin
 | `agentshield_scan_file` | To scan all packages in a requirements.txt / package.json / Cargo.toml at once |
 | `agentshield_posture` | To get a full security posture report |
 | `agentshield_sbom` | To generate a CycloneDX v1.4 JSON SBOM from a manifest file |
+| `agentshield_diff_scan` | To scan only changed packages between two manifest snapshots (CI delta scanning) |
+| `agentshield_scan_docker` | To scan packages from `RUN pip/npm/cargo install` in a Dockerfile |
 
 **Important — instruct your agent to use AgentShield:**
 
@@ -582,11 +584,25 @@ agentshield cache warm
 # Check for drift in previously-allowed packages
 agentshield drift-check
 
+# Scan only packages that changed between two manifest snapshots
+agentshield diff-scan old-requirements.txt new-requirements.txt
+
+# Scan packages referenced in a Dockerfile
+agentshield scan-docker Dockerfile
+
 # Start MCP server (agents connect to this)
 agentshield serve --mcp
 
+# Start HTTP REST API server on localhost:8765
+agentshield serve --http
+agentshield serve --http --port 9000
+
 # Start IPC daemon (shell scripts connect to this)
 agentshield serve
+
+# Start a guarded shell that intercepts pip/npm/cargo installs
+agentshield guard
+agentshield guard --shell zsh
 ```
 
 ---

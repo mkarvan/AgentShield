@@ -24,6 +24,45 @@ _PROTOCOL_VERSION = "2024-11-05"
 
 _TOOLS: list[dict[str, Any]] = [
     {
+        "name": "agentshield_diff_scan",
+        "description": (
+            "Scan only packages that changed between two manifest snapshots. "
+            "Added and upgraded packages are fully scanned; removed and unchanged "
+            "packages are skipped.  Useful in CI to scan only PR-level deltas."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "old_path": {
+                    "type": "string",
+                    "description": "Path to the old manifest file.",
+                },
+                "new_path": {
+                    "type": "string",
+                    "description": "Path to the new manifest file.",
+                },
+            },
+            "required": ["old_path", "new_path"],
+        },
+    },
+    {
+        "name": "agentshield_scan_docker",
+        "description": (
+            "Scan packages from RUN pip/npm/cargo install commands in a Dockerfile. "
+            "Returns the same aggregate decision and per-package summary as scan_file."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute or relative path to the Dockerfile.",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "agentshield_scan",
         "description": (
             "Check a package for security vulnerabilities before installing. "
@@ -230,6 +269,10 @@ class MCPServer:
             return await self._tool_posture(args)
         if name == "agentshield_sbom":
             return await self._tool_sbom(args)
+        if name == "agentshield_diff_scan":
+            return await self._tool_diff_scan(args)
+        if name == "agentshield_scan_docker":
+            return await self._tool_scan_docker(args)
         return _tool_error(f"Unknown tool: {name!r}")
 
     async def _tool_scan(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -257,6 +300,8 @@ class MCPServer:
                 "decision": result.decision.action.value,
                 "reason": result.decision.reason,
                 "max_severity": result.max_severity.value,
+                "trust_score": result.trust_score,
+                "trust_label": result.trust_label,
                 "cache_hit": result.cache_hit,
                 "scan_duration_ms": result.scan_duration_ms,
                 "findings": [
@@ -362,6 +407,129 @@ class MCPServer:
             return {"content": [{"type": "text", "text": render_json(report)}]}
         except Exception as exc:
             return _tool_error(f"Posture check failed: {exc}")
+
+    async def _tool_diff_scan(self, args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            old_path = args["old_path"]
+            new_path = args["new_path"]
+        except KeyError as exc:
+            return _tool_error(f"Missing required argument: {exc}")
+
+        try:
+            from pathlib import Path as _Path
+
+            from agentshield.analyzers.diff_scanner import run_diff_scan
+
+            result = await run_diff_scan(self.shield, _Path(old_path), _Path(new_path))
+            payload = {
+                "decision": result.aggregate_decision.action.value,
+                "reason": result.aggregate_decision.reason,
+                "old_path": result.old_path,
+                "new_path": result.new_path,
+                "total_scanned": result.total_scanned,
+                "blocked": result.blocked,
+                "warned": result.warned,
+                "added": [
+                    {
+                        "package": r.request.package,
+                        "version": r.request.version,
+                        "ecosystem": r.request.ecosystem.value,
+                        "decision": r.decision.action.value,
+                        "max_severity": r.max_severity.value,
+                        "findings_count": len(r.findings),
+                    }
+                    for r in result.added_results
+                ],
+                "upgraded": [
+                    {
+                        "package": r.request.package,
+                        "version": r.request.version,
+                        "ecosystem": r.request.ecosystem.value,
+                        "decision": r.decision.action.value,
+                        "max_severity": r.max_severity.value,
+                        "findings_count": len(r.findings),
+                    }
+                    for r in result.upgraded_results
+                ],
+                "removed": [
+                    {
+                        "package": d.package,
+                        "version": d.version,
+                        "ecosystem": d.ecosystem.value,
+                    }
+                    for d in result.removed
+                ],
+                "unchanged_count": len(result.unchanged),
+            }
+            return {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}
+        except Exception as exc:
+            return _tool_error(f"diff-scan failed: {exc}")
+
+    async def _tool_scan_docker(self, args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            path_str = args["path"]
+        except KeyError:
+            return _tool_error("Missing required argument: 'path'")
+
+        try:
+            from pathlib import Path as _Path
+
+            from agentshield.analyzers.dockerfile_scanner import parse_dockerfile
+
+            requests = parse_dockerfile(_Path(path_str))
+            if not requests:
+                payload = {
+                    "decision": "ALLOW",
+                    "reason": "No package install commands found in Dockerfile",
+                    "total_packages": 0,
+                    "blocked": 0,
+                    "warned": 0,
+                    "allowed": 0,
+                    "packages": [],
+                }
+                return {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}
+
+            import asyncio as _asyncio
+
+            _sem = _asyncio.Semaphore(10)
+
+            async def _scan_one(req: object) -> object:
+                from agentshield.core.models import ScanRequest as _SR
+
+                r: _SR = req  # type: ignore[assignment]
+                async with _sem:
+                    return await self.shield.ascan(r)
+
+            raw = await _asyncio.gather(*[_scan_one(r) for r in requests], return_exceptions=True)
+
+            from agentshield.core.models import FileScanResult as _FSR
+            from agentshield.core.models import ScanResult as _SR2
+
+            results = [r for r in raw if isinstance(r, _SR2)]
+            file_result = _FSR.from_results(path_str, results)
+
+            payload = {
+                "decision": file_result.aggregate_decision.action.value,
+                "reason": file_result.aggregate_decision.reason,
+                "path": path_str,
+                "total_packages": file_result.total_packages,
+                "blocked": file_result.blocked,
+                "warned": file_result.warned,
+                "allowed": file_result.allowed,
+                "packages": [
+                    {
+                        "package": r.request.package,
+                        "ecosystem": r.request.ecosystem.value,
+                        "decision": r.decision.action.value,
+                        "max_severity": r.max_severity.value,
+                        "findings_count": len(r.findings),
+                    }
+                    for r in results
+                ],
+            }
+            return {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}
+        except Exception as exc:
+            return _tool_error(f"scan-docker failed: {exc}")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

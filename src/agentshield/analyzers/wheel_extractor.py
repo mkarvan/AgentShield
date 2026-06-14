@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+import tarfile
 import tempfile
 import zipfile
 from collections.abc import AsyncIterator
@@ -85,12 +87,34 @@ def _extract_wheel(wheel_path: Path, extract_to: Path) -> None:
         _safe_zipfile_extract(zf, extract_to)
 
 
-def _extract_sdist(sdist_path: Path, extract_to: Path) -> None:
-    import tarfile
+def _safe_tarfile_extract(tf: tarfile.TarFile, extract_to: Path) -> None:
+    """Extract a tar archive, blocking path-traversal (tar-slip) attacks.
 
+    On Python >= 3.12 we use the built-in ``filter="data"`` guard.
+    On 3.11 we manually validate each member path -- the ``filter`` parameter
+    was only added in 3.12 and raises TypeError on earlier versions.
+    """
+    if sys.version_info >= (3, 12):
+        tf.extractall(extract_to, filter="data")
+    else:
+        target_dir = os.path.realpath(extract_to)
+        for member in tf.getmembers():
+            member_path = os.path.realpath(os.path.join(target_dir, member.name))
+            if not (member_path.startswith(target_dir + os.sep) or member_path == target_dir):
+                raise WheelExtractionError(
+                    f"Tar-slip detected: {member.name!r} resolves outside extraction directory"
+                )
+            if member.issym() or member.islnk():
+                link_target = os.path.realpath(os.path.join(target_dir, member.linkname))
+                if not link_target.startswith(target_dir + os.sep):
+                    raise WheelExtractionError(f"Tar-slip detected via symlink: {member.name!r}")
+        tf.extractall(extract_to)
+
+
+def _extract_sdist(sdist_path: Path, extract_to: Path) -> None:
     if tarfile.is_tarfile(sdist_path):
         with tarfile.open(sdist_path, "r:*") as tf:
-            tf.extractall(extract_to, filter="data")
+            _safe_tarfile_extract(tf, extract_to)
     elif zipfile.is_zipfile(sdist_path):
         with zipfile.ZipFile(sdist_path, "r") as zf:
             _safe_zipfile_extract(zf, extract_to)

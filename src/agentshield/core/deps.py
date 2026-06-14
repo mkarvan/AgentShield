@@ -9,6 +9,7 @@ from typing import Any, NamedTuple
 import httpx
 
 from agentshield.core.models import Ecosystem
+from agentshield.core.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,16 @@ async def resolve_deps(
 
     Returns a flat, deduplicated list of every reachable dependency.
     Circular dependencies are detected via a visited set and silently skipped.
+
+    A shared httpx.AsyncClient is used for connection pooling across all hops.
     """
     collected: list[DepSpec] = []
     # Seed visited with the root package so it is never added to collected.
     visited: set[str] = {f"{ecosystem.value}:{package.lower()}"}
-    await _resolve_recursive(package, version, ecosystem, max_depth, 0, visited, collected)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        await _resolve_recursive(
+            package, version, ecosystem, max_depth, 0, visited, collected, client
+        )
     return collected
 
 
@@ -58,12 +64,13 @@ async def _resolve_recursive(
     current_depth: int,
     visited: set[str],
     collected: list[DepSpec],
+    client: httpx.AsyncClient,
 ) -> None:
     if current_depth >= max_depth:
         return
 
     try:
-        direct = await _fetch_direct_deps(package, version, ecosystem)
+        direct = await _fetch_direct_deps(package, version, ecosystem, client)
     except Exception as exc:
         logger.debug(
             "Could not fetch deps for %s/%s@%s: %s", ecosystem.value, package, version, exc
@@ -84,27 +91,34 @@ async def _resolve_recursive(
             current_depth + 1,
             visited,
             collected,
+            client,
         )
 
 
 async def _fetch_direct_deps(
-    package: str, version: str | None, ecosystem: Ecosystem
+    package: str, version: str | None, ecosystem: Ecosystem, client: httpx.AsyncClient
 ) -> list[DepSpec]:
     if ecosystem == Ecosystem.PYPI:
-        return await _fetch_pypi_deps(package, version)
+        return await _fetch_pypi_deps(package, version, client)
     if ecosystem == Ecosystem.NPM:
-        return await _fetch_npm_deps(package, version)
+        return await _fetch_npm_deps(package, version, client)
     if ecosystem == Ecosystem.CARGO:
-        return await _fetch_cargo_deps(package, version)
+        return await _fetch_cargo_deps(package, version, client)
     return []
 
 
-async def _fetch_pypi_deps(package: str, version: str | None) -> list[DepSpec]:
+async def _fetch_pypi_deps(
+    package: str, version: str | None, client: httpx.AsyncClient
+) -> list[DepSpec]:
     url = f"{_PYPI_BASE}/{package}/{version}/json" if version else f"{_PYPI_BASE}/{package}/json"
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+
+    async def _do() -> dict[str, Any]:
         resp = await client.get(url)
         resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
+        result: dict[str, Any] = resp.json()
+        return result
+
+    data = await with_retry(_do, label=f"PyPI deps {package}")
 
     info: dict[str, Any] = data.get("info") or {}
     requires_dist: list[Any] = info.get("requires_dist") or []
@@ -134,13 +148,19 @@ async def _fetch_pypi_deps(package: str, version: str | None) -> list[DepSpec]:
     return deps
 
 
-async def _fetch_npm_deps(package: str, version: str | None) -> list[DepSpec]:
+async def _fetch_npm_deps(
+    package: str, version: str | None, client: httpx.AsyncClient
+) -> list[DepSpec]:
     ver = version or "latest"
     url = f"{_NPM_BASE}/{package}/{ver}"
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+
+    async def _do() -> dict[str, Any]:
         resp = await client.get(url)
         resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
+        result: dict[str, Any] = resp.json()
+        return result
+
+    data = await with_retry(_do, label=f"npm deps {package}")
 
     dependencies: dict[str, Any] = data.get("dependencies") or {}
     return [
@@ -149,14 +169,20 @@ async def _fetch_npm_deps(package: str, version: str | None) -> list[DepSpec]:
     ]
 
 
-async def _fetch_cargo_deps(package: str, version: str | None) -> list[DepSpec]:
+async def _fetch_cargo_deps(
+    package: str, version: str | None, client: httpx.AsyncClient
+) -> list[DepSpec]:
     dep_version: str
     if version is None:
         meta_url = f"{_CRATES_BASE}/{package}"
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+
+        async def _do_meta() -> dict[str, Any]:
             meta_resp = await client.get(meta_url, headers={"User-Agent": "agentshield/0.2"})
             meta_resp.raise_for_status()
-            meta: dict[str, Any] = meta_resp.json()
+            result: dict[str, Any] = meta_resp.json()
+            return result
+
+        meta = await with_retry(_do_meta, label=f"Cargo meta {package}")
         versions: list[Any] = meta.get("versions") or []
         if not versions:
             return []
@@ -165,10 +191,14 @@ async def _fetch_cargo_deps(package: str, version: str | None) -> list[DepSpec]:
         dep_version = version
 
     url = f"{_CRATES_BASE}/{package}/{dep_version}/dependencies"
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+
+    async def _do_deps() -> dict[str, Any]:
         resp = await client.get(url, headers={"User-Agent": "agentshield/0.2"})
         resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
+        result: dict[str, Any] = resp.json()
+        return result
+
+    data = await with_retry(_do_deps, label=f"Cargo deps {package}")
 
     dependencies: list[Any] = data.get("dependencies") or []
     return [

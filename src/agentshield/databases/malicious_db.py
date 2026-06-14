@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -179,7 +180,10 @@ async def _fetch_malicious_from_osv(
     if curated_key is None:
         return []
 
-    packages_to_check = _load_curated().get(curated_key, [])
+    # Use singleton instance to leverage the in-memory cache instead of
+    # re-reading JSON from disk on every warm() call.
+    db = MaliciousDB()
+    packages_to_check = db._get_curated().get(curated_key, [])
     if not packages_to_check:
         return []
 
@@ -224,5 +228,6 @@ async def _check_sqlite(package: str, ecosystem: str, db_path: Path) -> dict[str
             ) as cur:
                 row = await cur.fetchone()
         return dict(row) if row else None
-    except Exception:
+    except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
+        logger.warning("SQLite malicious-package check failed for %s: %s", package, exc)
         return None

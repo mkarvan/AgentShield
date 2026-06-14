@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from pathlib import Path
 from typing import Any
 
-import toml
 from pydantic import BaseModel, Field, model_validator
 
 from agentshield.core.models import Ecosystem, ResponseMode, Severity
@@ -111,7 +111,7 @@ class Config(BaseModel):
         config_path = path or DEFAULT_CONFIG_PATH
         if not config_path.exists():
             return cls()
-        raw = toml.loads(config_path.read_text())
+        raw = tomllib.loads(config_path.read_text())
         return cls.model_validate(raw)
 
     def response_mode_for(

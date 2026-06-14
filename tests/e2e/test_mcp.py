@@ -284,7 +284,7 @@ async def test_scan_context_hint_forwarded(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_posture_tool_returns_not_implemented_message(tmp_path):
+async def test_posture_tool_returns_posture_report(tmp_path):
     server = _make_server(tmp_path)
     response = await server.handle_message(
         {
@@ -296,7 +296,8 @@ async def test_posture_tool_returns_not_implemented_message(tmp_path):
     )
 
     content = response["result"]["content"][0]["text"]
-    assert "Phase 4" in content or "not yet" in content.lower()
+    assert "risk_score" in content
+    assert "risk_label" in content
 
 
 # ── Unknown method / tool ─────────────────────────────────────────────────────

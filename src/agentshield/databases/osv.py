@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from agentshield.core.models import Ecosystem, Finding, ScanRequest, Severity
+from agentshield.core.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +53,14 @@ class OSVClient:
         if request.version:
             payload["version"] = request.version
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(OSV_API, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        async def _do_request() -> list[Finding]:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(OSV_API, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+            return [_vuln_to_finding(v) for v in data.get("vulns", [])]
 
-        return [_vuln_to_finding(v) for v in data.get("vulns", [])]
+        return await with_retry(_do_request, label=f"OSV scan {request.package}")
 
 
 def _vuln_to_finding(vuln: dict[str, Any]) -> Finding:
@@ -147,7 +150,8 @@ def _cvss3_base_score(vector: str) -> float | None:
             else min(1.08 * (impact + exploitability), 10.0)
         )
         return math.ceil(raw * 10) / 10  # roundup to 1 decimal place
-    except Exception:
+    except (KeyError, ValueError, TypeError) as exc:
+        logger.debug("Failed to parse CVSS vector %r: %s", vector, exc)
         return None
 
 

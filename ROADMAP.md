@@ -37,12 +37,26 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - GitHub Advisory client standalone tests (8 new tests: Cargo ecosystem, rate-limit handling, malformed responses, missing fields, severity defaults, reference filtering)
 - IPC server tests (17 new tests: dispatch-level ping/scan/error handling, real Unix socket lifecycle, malformed JSON, multi-request connections, graceful disconnect)
 
+### v0.2.1 — Hardening (done)
+
+- Python 3.11 compatibility: tarfile.extractall `filter="data"` crashes on 3.11 (added in 3.12). Added version check with manual tar-slip guard fallback.
+- IPC `_handle_scan` now returns `transitive_results` (consistent with MCP endpoint)
+- Replaced third-party `toml` with stdlib `tomllib` (available since 3.11)
+- Tightened bare `except Exception` in `_check_sqlite` and `_cvss3_base_score` — now catches specific exceptions and logs errors
+- Fixed `_load_curated()` cache bypass in `malicious_db.warm()` — uses instance cache instead of re-reading JSON from disk
+- Added exponential backoff with jitter for 429/5xx responses in OSV and deps resolver
+- Shared `httpx.AsyncClient` across deps resolver hops for connection pooling
+
 ## v0.3.0 — Planned
 
 ### Integration
 
-- Claude Code integration — currently a stub `__init__.py`
-- IPC socket authentication — add peer-credential validation or document the limitation
+- Claude Code integration — currently a stub `__init__.py`; add "not yet implemented" notice or remove until ready
+- IPC socket authentication — add SO_PEERCRED check or shared secret
+
+### Testing
+
+- Renderer test coverage — Terminal, JSON, HTML, Markdown renderers still at 0%
 
 ### Data & analysis
 

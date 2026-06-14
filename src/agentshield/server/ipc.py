@@ -148,6 +148,16 @@ class IPCServer:
                 }
                 for f in result.findings
             ],
+            "transitive_results": [
+                {
+                    "package": tr.request.package,
+                    "ecosystem": tr.request.ecosystem.value,
+                    "decision": tr.decision.action.value,
+                    "max_severity": tr.max_severity.value,
+                    "findings_count": len(tr.findings),
+                }
+                for tr in result.transitive_results
+            ],
         }
 
 

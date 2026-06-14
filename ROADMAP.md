@@ -47,28 +47,22 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - Added exponential backoff with jitter for 429/5xx responses in OSV and deps resolver
 - Shared `httpx.AsyncClient` across deps resolver hops for connection pooling
 
-## v0.3.0 — Planned
+## v0.3.0
 
-### Integration
+### Testing (done)
 
-- Claude Code integration — currently a stub `__init__.py`; add "not yet implemented" notice or remove until ready
+- Renderer test coverage — 62 new tests for Terminal, JSON, HTML, and Markdown renderers (0% → 97%)
+
+### Code quality (done)
+
+- Claude Code stub now raises `NotImplementedError` on import with actionable message
+- `prompt_injection.py` converted to async interface; scanner and all tests updated
+
+### Remaining — Planned
+
 - IPC socket authentication — add SO_PEERCRED check or shared secret
-
-### Testing
-
-- Renderer test coverage — Terminal, JSON, HTML, Markdown renderers still at 0%
-
-### Data & analysis
-
 - SBOM generation and lockfile auditing
 - Curated malicious package list expansion — current list is static and incomplete
-
-### Code quality
-
-- `prompt_injection.py` is sync while everything else is async — align the interface
 - Clarify `DecisionAction.NEEDS_CONFIRMATION` vs `WARN_CONFIRM` distinction in docs
 - `--deep` mode supply chain risk documentation — downloading packages for analysis has inherent risk
-
-### Distribution
-
 - PyPI publishing (blocked by name conflict — `agentshield` taken by another maintainer)

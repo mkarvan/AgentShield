@@ -16,7 +16,13 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from agentshield.core.models import DecisionAction, Ecosystem, ScanRequest, ScanResult
+from agentshield.core.models import (
+    DecisionAction,
+    Ecosystem,
+    FileScanResult,
+    ScanRequest,
+    ScanResult,
+)
 from agentshield.core.scanner import AgentShield
 
 app = typer.Typer(name="agentshield", help="Security layer for AI agent package installations")
@@ -294,6 +300,47 @@ async def _cmd_warm(cfg: object, ecosystems_str: str) -> None:
             console.print(f"  • {err}")
 
 
+@app.command("scan-file")
+def scan_file(
+    path: Path = typer.Argument(
+        ...,
+        help="Path to manifest file (requirements.txt, package.json, Cargo.toml, package-lock.json)",
+    ),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+    offline: bool = typer.Option(False, "--offline", help="Use only local DB — no network calls"),
+) -> None:
+    """Scan all packages declared in a manifest file.
+
+    \b
+    agentshield scan-file requirements.txt
+    agentshield scan-file package.json
+    agentshield scan-file Cargo.toml
+    agentshield scan-file package-lock.json
+    """
+    from agentshield.core.config import Config
+
+    cfg = Config.load(config)
+    if offline:
+        cfg = cfg.model_copy(update={"offline": True})
+
+    shield = AgentShield(config=cfg)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn(f"[cyan]Scanning {path.name}…[/cyan]"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("scan-file", total=None)
+        result = asyncio.run(shield.ascan_file(path))
+
+    _print_file_result(result)
+
+    if result.aggregate_decision.action == DecisionAction.BLOCK:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def serve(
     mcp: bool = typer.Option(False, "--mcp", help="Run as MCP tool server (stdio transport)"),
@@ -332,6 +379,67 @@ def serve(
             asyncio.run(server_ipc.start())
         except KeyboardInterrupt:
             console.print("\n[dim]AgentShield IPC server stopped.[/dim]")
+
+
+def _print_file_result(result: FileScanResult) -> None:
+    action = result.aggregate_decision.action
+    color = {
+        DecisionAction.ALLOW: "green",
+        DecisionAction.LOG_ASYNC: "cyan",
+        DecisionAction.NEEDS_CONFIRMATION: "yellow",
+        DecisionAction.BLOCK: "red",
+    }.get(action, "white")
+
+    console.print(
+        f"\n[bold {color}]{action.value}[/bold {color}] — {result.aggregate_decision.reason}"
+    )
+    console.print(
+        f"  File: {result.path}  |  Packages: {result.total_packages}"
+        f"  |  Blocked: [red]{result.blocked}[/red]"
+        f"  |  Warned: [yellow]{result.warned}[/yellow]"
+        f"  |  Allowed: [green]{result.allowed}[/green]\n"
+    )
+
+    if not result.results:
+        console.print("  [dim]No packages found.[/dim]")
+        return
+
+    table = Table(title="Package Scan Summary", show_header=True)
+    table.add_column("Package", style="bold")
+    table.add_column("Version", style="dim")
+    table.add_column("Ecosystem", style="dim")
+    table.add_column("Status")
+    table.add_column("Max Severity")
+    table.add_column("Findings", justify="right", style="dim")
+
+    for r in result.results:
+        req = r.request
+        a = r.decision.action
+        sev = r.max_severity.value
+        status_color = {
+            DecisionAction.ALLOW: "green",
+            DecisionAction.LOG_ASYNC: "cyan",
+            DecisionAction.NEEDS_CONFIRMATION: "yellow",
+            DecisionAction.BLOCK: "red",
+        }.get(a, "white")
+        sev_color = {
+            "CRITICAL": "red",
+            "HIGH": "orange3",
+            "MEDIUM": "yellow",
+            "LOW": "cyan",
+            "INFO": "dim",
+            "NONE": "dim",
+        }.get(sev, "white")
+        table.add_row(
+            req.package,
+            req.version or "—",
+            req.ecosystem.value,
+            f"[{status_color}]{a.value}[/{status_color}]",
+            f"[{sev_color}]{sev}[/{sev_color}]",
+            str(len(r.findings)),
+        )
+
+    console.print(table)
 
 
 def _print_result(result: ScanResult, wall_ms: int | None = None) -> None:

@@ -13,6 +13,7 @@ populate the SQLite table from the OSV bulk API.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -54,20 +55,34 @@ class MaliciousDB:
 
     def __init__(self) -> None:
         self._curated: dict[str, list[str]] | None = None
+        self._curated_lower: dict[str, frozenset[str]] | None = None
 
     def _get_curated(self) -> dict[str, list[str]]:
         if self._curated is None:
-            self._curated = _load_curated()
+            raw = _load_curated()
+            self._curated = raw
+            self._curated_lower = {
+                eco: frozenset(p.lower() for p in pkgs) for eco, pkgs in raw.items()
+            }
         return self._curated
+
+    def _get_curated_lower(self) -> dict[str, frozenset[str]]:
+        if self._curated_lower is None:
+            curated = self._get_curated()
+            if self._curated_lower is None:
+                self._curated_lower = {
+                    eco: frozenset(p.lower() for p in pkgs) for eco, pkgs in curated.items()
+                }
+        return self._curated_lower
 
     async def check(self, request: ScanRequest, db_path: Path | None = None) -> list[Finding]:
         """Return a T1.1 Finding if the package is known-malicious (offline check only)."""
         findings: list[Finding] = []
 
         # 1. Curated list check (instant, always available)
-        curated = self._get_curated()
+        curated_lower = self._get_curated_lower()
         eco_key = request.ecosystem.value
-        if request.package.lower() in [p.lower() for p in curated.get(eco_key, [])]:
+        if request.package.lower() in curated_lower.get(eco_key, frozenset()):
             findings.append(
                 Finding(
                     rule_id="T1.1",
@@ -143,64 +158,57 @@ class MaliciousDB:
         return total
 
 
+_OSV_ECO_TO_CURATED_KEY: dict[str, str] = {
+    "PyPI": "pypi",
+    "npm": "npm",
+    "crates.io": "cargo",
+}
+
+_OSV_FETCH_CONCURRENCY = 5
+
+
 async def _fetch_malicious_from_osv(
     ecosystem: str,
 ) -> list[tuple[str, str, str | None, str | None]]:
     """Query OSV for known-malicious advisories in a given ecosystem.
 
-    OSV doesn't have a dedicated malicious endpoint; we query using a broad
-    search and filter client-side for entries with type=MALICIOUS.
+    Uses asyncio.gather with a semaphore to fetch all packages concurrently
+    (up to _OSV_FETCH_CONCURRENCY simultaneous requests).
     """
-    # OSV's batch query doesn't support filtering by type directly.
-    # We use the vulnerabilities list API with a package name wildcard approach.
-    # The practical alternative: use the OSV bulk export (see WarmCommand).
-    # For the non-bulk path, we can query known-malicious package names from curated list.
+    curated_key = _OSV_ECO_TO_CURATED_KEY.get(ecosystem)
+    if curated_key is None:
+        return []
 
-    rows: list[tuple[str, str, str | None, str | None]] = []
-
-    curated = _load_curated()
-    eco_key = next(
-        (
-            k
-            for k, v in {"PyPI": "pypi", "npm": "npm", "crates.io": "cargo"}.items()
-            if k == ecosystem
-        ),
-        None,
-    )
-    if eco_key is None:
-        return rows
-
-    packages_to_check = curated.get(eco_key, [])
+    packages_to_check = _load_curated().get(curated_key, [])
     if not packages_to_check:
-        return rows
+        return []
 
-    # Batch-query OSV for each curated malicious package to validate and get details
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for pkg in packages_to_check:
+    sem = asyncio.Semaphore(_OSV_FETCH_CONCURRENCY)
+
+    async def _check_one(
+        client: httpx.AsyncClient, pkg: str
+    ) -> tuple[str, str, str | None, str | None] | None:
+        async with sem:
             try:
                 payload = {"package": {"name": pkg, "ecosystem": ecosystem}}
                 resp = await client.post(OSV_QUERY_URL, json=payload)
                 if resp.status_code != 200:
-                    continue
+                    return None
                 data = resp.json()
-                vulns = data.get("vulns", [])
-                is_malicious = any(
-                    v.get("database_specific", {}).get("type") == "MALICIOUS" for v in vulns
-                )
-                reason = None
-                if is_malicious:
-                    v = next(
-                        v
-                        for v in vulns
-                        if v.get("database_specific", {}).get("type") == "MALICIOUS"
-                    )
-                    reason = v.get("summary")
-
-                rows.append((pkg, eco_key, reason, "osv_malicious+curated"))
+                vulns: list[dict[str, Any]] = data.get("vulns", [])
+                malicious = [
+                    v for v in vulns if v.get("database_specific", {}).get("type") == "MALICIOUS"
+                ]
+                reason = malicious[0].get("summary") if malicious else None
+                return (pkg, curated_key, reason, "osv_malicious+curated")
             except Exception as exc:
                 logger.debug("OSV check for %s/%s failed: %s", ecosystem, pkg, exc)
+                return None
 
-    return rows
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        raw = await asyncio.gather(*[_check_one(client, pkg) for pkg in packages_to_check])
+
+    return [r for r in raw if r is not None]
 
 
 async def _check_sqlite(package: str, ecosystem: str, db_path: Path) -> dict[str, Any] | None:

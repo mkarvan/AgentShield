@@ -60,6 +60,28 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "agentshield_scan_file",
+        "description": (
+            "Scan all packages declared in a manifest file "
+            "(requirements.txt, package.json, Cargo.toml, or package-lock.json). "
+            "Returns an aggregate decision and a per-package summary table."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Absolute or relative path to the manifest file. "
+                        "Supported filenames: requirements.txt, package.json, "
+                        "Cargo.toml, package-lock.json."
+                    ),
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "agentshield_posture",
         "description": "Generate a security posture report for the current environment.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -146,6 +168,8 @@ class MCPServer:
     async def _call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "agentshield_scan":
             return await self._tool_scan(args)
+        if name == "agentshield_scan_file":
+            return await self._tool_scan_file(args)
         if name == "agentshield_posture":
             return self._tool_posture()
         return _tool_error(f"Unknown tool: {name!r}")
@@ -192,6 +216,43 @@ class MCPServer:
             return _tool_error(f"Missing required argument: {exc}")
         except Exception as exc:
             return _tool_error(f"Scan failed: {exc}")
+
+    async def _tool_scan_file(self, args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            path_str = args["path"]
+        except KeyError:
+            return _tool_error("Missing required argument: 'path'")
+
+        try:
+            from pathlib import Path as _Path
+
+            result = await self.shield.ascan_file(_Path(path_str))
+
+            payload = {
+                "decision": result.aggregate_decision.action.value,
+                "reason": result.aggregate_decision.reason,
+                "path": result.path,
+                "total_packages": result.total_packages,
+                "blocked": result.blocked,
+                "warned": result.warned,
+                "allowed": result.allowed,
+                "total_findings": result.total_findings,
+                "packages": [
+                    {
+                        "package": r.request.package,
+                        "version": r.request.version,
+                        "ecosystem": r.request.ecosystem.value,
+                        "decision": r.decision.action.value,
+                        "max_severity": r.max_severity.value,
+                        "findings_count": len(r.findings),
+                    }
+                    for r in result.results
+                ],
+            }
+            return {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}
+
+        except Exception as exc:
+            return _tool_error(f"scan-file failed: {exc}")
 
     def _tool_posture(self) -> dict[str, Any]:
         return {

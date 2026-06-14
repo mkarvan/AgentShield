@@ -11,6 +11,7 @@ from agentshield.core.config import Config
 from agentshield.core.models import (
     Decision,
     DecisionAction,
+    FileScanResult,
     Finding,
     ScanRequest,
     ScanResult,
@@ -20,7 +21,14 @@ from agentshield.core.response_engine import ResponseEngine
 
 logger = logging.getLogger(__name__)
 
-_SEVERITY_ORDER = ["NONE", "INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+_SEVERITY_RANK: dict[str, int] = {
+    "NONE": 0,
+    "INFO": 1,
+    "LOW": 2,
+    "MEDIUM": 3,
+    "HIGH": 4,
+    "CRITICAL": 5,
+}
 
 
 class AgentShield:
@@ -32,6 +40,39 @@ class AgentShield:
     def scan(self, request: ScanRequest) -> ScanResult:
         """Synchronous scan — wraps ascan(). Prefer ascan() in async contexts."""
         return asyncio.run(self.ascan(request))
+
+    def scan_file(self, path: Path | str) -> FileScanResult:
+        """Synchronous manifest scan — wraps ascan_file(). Prefer ascan_file() in async contexts."""
+        return asyncio.run(self.ascan_file(path))
+
+    async def ascan_file(self, path: Path | str) -> FileScanResult:
+        """Scan all packages declared in a manifest file.
+
+        Auto-detects format from the filename (requirements.txt, package.json,
+        Cargo.toml, package-lock.json). Returns an aggregate FileScanResult.
+        """
+        from agentshield.core.manifest import parse_manifest
+
+        file_path = Path(path)
+        requests = parse_manifest(file_path)
+
+        _FILE_SCAN_CONCURRENCY = 10
+        sem = asyncio.Semaphore(_FILE_SCAN_CONCURRENCY)
+
+        async def _scan_one(req: ScanRequest) -> ScanResult:
+            async with sem:
+                return await self.ascan(req)
+
+        raw = await asyncio.gather(*[_scan_one(req) for req in requests], return_exceptions=True)
+
+        scan_results: list[ScanResult] = []
+        for i, r in enumerate(raw):
+            if isinstance(r, ScanResult):
+                scan_results.append(r)
+            elif isinstance(r, Exception):
+                logger.warning("Scan failed for '%s': %s", requests[i].package, r)
+
+        return FileScanResult.from_results(file_path, scan_results)
 
     async def ascan(self, request: ScanRequest) -> ScanResult:
         """Asynchronous scan — the main entry point for all integrations."""
@@ -273,4 +314,4 @@ def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
 def _max_severity(findings: list[Finding]) -> Severity:
     if not findings:
         return Severity.NONE
-    return max(findings, key=lambda f: _SEVERITY_ORDER.index(f.severity.value)).severity
+    return max(findings, key=lambda f: _SEVERITY_RANK[f.severity.value]).severity

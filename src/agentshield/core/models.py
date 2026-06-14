@@ -21,7 +21,14 @@ class Ecosystem(str, Enum):
     CARGO = "cargo"
 
 
-_SEVERITY_ORDER = ["NONE", "INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+_SEVERITY_RANK: dict[str, int] = {
+    "NONE": 0,
+    "INFO": 1,
+    "LOW": 2,
+    "MEDIUM": 3,
+    "HIGH": 4,
+    "CRITICAL": 5,
+}
 
 
 class Severity(str, Enum):
@@ -35,7 +42,7 @@ class Severity(str, Enum):
     NONE = "NONE"
 
     def _rank(self) -> int:
-        return _SEVERITY_ORDER.index(self.value)
+        return _SEVERITY_RANK[self.value]
 
     # All six comparisons defined explicitly because str's implementations
     # take MRO priority over functools.total_ordering's generated methods.
@@ -208,12 +215,70 @@ class ScanResult(BaseModel):
         """max_severity must be >= every individual finding's severity."""
         if not self.findings:
             return self
-        order = ["NONE", "INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
-        max_rank = order.index(self.max_severity.value)
+        max_rank = _SEVERITY_RANK[self.max_severity.value]
         for f in self.findings:
-            if order.index(f.severity.value) > max_rank:
+            if _SEVERITY_RANK[f.severity.value] > max_rank:
                 raise ValueError(
                     f"max_severity {self.max_severity} is lower than finding "
                     f"{f.rule_id} severity {f.severity}"
                 )
         return self
+
+
+class FileScanResult(BaseModel):
+    """Aggregate result from scanning a manifest file (requirements.txt, package.json, etc.).
+
+    Fields:
+        path: Absolute path to the scanned manifest file.
+        results: Per-package ScanResult list (same order as packages in the manifest).
+        aggregate_decision: Overall verdict — BLOCK if any package is blocked, etc.
+        total_packages: Number of packages found and scanned.
+        blocked: Count of packages with a BLOCK decision.
+        warned: Count of packages with a NEEDS_CONFIRMATION or LOG_ASYNC decision.
+        allowed: Count of packages with an ALLOW decision.
+        total_findings: Sum of all findings across all packages.
+    """
+
+    path: str
+    results: list[ScanResult] = Field(default_factory=list)
+    aggregate_decision: Decision
+    total_packages: int = 0
+    blocked: int = 0
+    warned: int = 0
+    allowed: int = 0
+    total_findings: int = 0
+
+    @classmethod
+    def from_results(cls, path: Any, results: list[ScanResult]) -> FileScanResult:
+        blocked = sum(1 for r in results if r.decision.action == DecisionAction.BLOCK)
+        warned = sum(
+            1
+            for r in results
+            if r.decision.action in (DecisionAction.NEEDS_CONFIRMATION, DecisionAction.LOG_ASYNC)
+        )
+        allowed = sum(1 for r in results if r.decision.action == DecisionAction.ALLOW)
+        total_findings = sum(len(r.findings) for r in results)
+
+        if blocked:
+            agg_action = DecisionAction.BLOCK
+            agg_reason = f"{blocked} package(s) blocked"
+        elif warned:
+            agg_action = DecisionAction.NEEDS_CONFIRMATION
+            agg_reason = f"{warned} package(s) require review"
+        elif results:
+            agg_action = DecisionAction.ALLOW
+            agg_reason = "All packages passed"
+        else:
+            agg_action = DecisionAction.ALLOW
+            agg_reason = "No packages found in manifest"
+
+        return cls(
+            path=str(path),
+            results=results,
+            aggregate_decision=Decision(action=agg_action, reason=agg_reason),
+            total_packages=len(results),
+            blocked=blocked,
+            warned=warned,
+            allowed=allowed,
+            total_findings=total_findings,
+        )

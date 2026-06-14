@@ -1,6 +1,7 @@
 from agentshield.core.models import (
     Decision,
     Ecosystem,
+    FileScanResult,
     Finding,
     ScanRequest,
     ScanResult,
@@ -12,6 +13,7 @@ __all__ = [
     "AgentShield",
     "Decision",
     "Ecosystem",
+    "FileScanResult",
     "Finding",
     "ScanRequest",
     "ScanResult",

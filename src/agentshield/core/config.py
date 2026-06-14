@@ -28,7 +28,7 @@ class SeverityPolicy(BaseModel):
 class CacheConfig(BaseModel):
     ttl_hours: int = 24
     max_entries: int = 50_000
-    db_path: Path = DEFAULT_DB_PATH
+    db_path: Path = Field(default_factory=lambda: DEFAULT_DB_PATH)
 
     @model_validator(mode="before")
     @classmethod
@@ -39,7 +39,7 @@ class CacheConfig(BaseModel):
 
 
 class ReportingConfig(BaseModel):
-    report_dir: Path = DEFAULT_REPORT_DIR
+    report_dir: Path = Field(default_factory=lambda: DEFAULT_REPORT_DIR)
     auto_report_on_exit: bool = True
 
     @model_validator(mode="before")

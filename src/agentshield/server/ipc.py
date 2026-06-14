@@ -126,13 +126,13 @@ class IPCServer:
     def __init__(
         self,
         shield: AgentShield,
-        sock_path: Path = DEFAULT_SOCK_PATH,
-        token_path: Path = _DEFAULT_TOKEN_PATH,
+        sock_path: Path | None = None,
+        token_path: Path | None = None,
         require_auth: bool = True,
     ) -> None:
         self.shield = shield
-        self.sock_path = sock_path
-        self.token_path = token_path
+        self.sock_path = sock_path if sock_path is not None else DEFAULT_SOCK_PATH
+        self.token_path = token_path if token_path is not None else _DEFAULT_TOKEN_PATH
         self.require_auth = require_auth
 
         self._use_peer_cred: bool = False

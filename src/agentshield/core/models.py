@@ -75,6 +75,10 @@ class Severity(str, Enum):
         return hash(self.value)
 
 
+# Canonical severity-string → Severity enum lookup; import this instead of redefining locally.
+_SEV_MAP: dict[str, Severity] = {s.value: s for s in Severity}
+
+
 class ResponseMode(str, Enum):
     """How AgentShield responds when a finding fires."""
 

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from agentshield.core.cache import ScanCache
 from agentshield.core.config import CacheConfig
-from agentshield.core.models import Finding, Severity
+from agentshield.core.models import _SEV_MAP, Finding, Severity
 from agentshield.reports.models import (
     AsyncLogEntry,
     DriftEvent,
@@ -114,14 +114,6 @@ async def _package_summary_from_local_db(
     db_path: Path,
 ) -> PackageSummary:
     """Build a PackageSummary for one package using only the local SQLite cache."""
-    _SEV_MAP = {
-        "CRITICAL": Severity.CRITICAL,
-        "HIGH": Severity.HIGH,
-        "MEDIUM": Severity.MEDIUM,
-        "LOW": Severity.LOW,
-        "INFO": Severity.INFO,
-    }
-
     cache = ScanCache(CacheConfig(db_path=db_path))
     findings: list[Finding] = []
 

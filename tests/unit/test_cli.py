@@ -5,7 +5,7 @@ All network calls are mocked via respx.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import respx
 from httpx import Response
@@ -23,8 +23,16 @@ runner = CliRunner()
 
 @respx.mock
 def test_scan_clean_package_exits_0(tmp_path):
+    from agentshield.analyzers.trust_score import TrustScoreResult
+
     respx.post(OSV_URL).mock(return_value=Response(200, json={"vulns": []}))
-    with patch("agentshield.analyzers.typosquatting.TyposquattingChecker._load", return_value=[]):
+    with (
+        patch("agentshield.analyzers.typosquatting.TyposquattingChecker._load", return_value=[]),
+        patch(
+            "agentshield.analyzers.trust_score.compute_trust_score",
+            AsyncMock(return_value=TrustScoreResult(score=80, label="high-trust")),
+        ),
+    ):
         result = runner.invoke(
             app,
             [
@@ -177,17 +185,17 @@ def test_posture_command_runs():
     assert result.exit_code == 0
 
 
-def test_posture_json_format_is_valid_json():
+def test_posture_json_format_is_valid_json(tmp_path):
     """posture --format json must produce parseable JSON even when descriptions contain newlines."""
     import json
 
-    result = runner.invoke(app, ["posture", "--format", "json", "--skip-packages"])
-    assert result.exit_code == 0
-    # Extract the JSON object from the output (ignoring any leading/trailing log noise).
-    start = result.output.find("{")
-    end = result.output.rfind("}") + 1
-    assert start != -1, f"No JSON object found in output: {result.output!r}"
-    parsed = json.loads(result.output[start:end])
+    out_file = tmp_path / "posture.json"
+    result = runner.invoke(
+        app, ["posture", "--format", "json", "--skip-packages", "--output", str(out_file)]
+    )
+    assert result.exit_code == 0, f"CLI failed: {result.output!r}"
+    assert out_file.exists(), f"Output file not created; CLI output: {result.output!r}"
+    parsed = json.loads(out_file.read_text())
     assert "risk_score" in parsed
     assert "critical_count" in parsed
 

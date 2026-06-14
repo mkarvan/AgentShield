@@ -9,6 +9,8 @@ from typing import Any
 from agentshield.core.cache import ScanCache
 from agentshield.core.config import Config
 from agentshield.core.models import (
+    _SEV_MAP,
+    _SEVERITY_RANK,
     Decision,
     DecisionAction,
     FileScanResult,
@@ -20,15 +22,6 @@ from agentshield.core.models import (
 from agentshield.core.response_engine import ResponseEngine
 
 logger = logging.getLogger(__name__)
-
-_SEVERITY_RANK: dict[str, int] = {
-    "NONE": 0,
-    "INFO": 1,
-    "LOW": 2,
-    "MEDIUM": 3,
-    "HIGH": 4,
-    "CRITICAL": 5,
-}
 
 
 class AgentShield:
@@ -450,15 +443,6 @@ async def _query_cve_mirror(request: ScanRequest, db_path: Path) -> list[Finding
     """Query the local cve_mirror table for offline CVE lookups."""
     from agentshield.core.cache import ScanCache
     from agentshield.core.config import CacheConfig
-    from agentshield.core.models import Severity
-
-    _SEV_MAP = {
-        "CRITICAL": Severity.CRITICAL,
-        "HIGH": Severity.HIGH,
-        "MEDIUM": Severity.MEDIUM,
-        "LOW": Severity.LOW,
-        "INFO": Severity.INFO,
-    }
 
     cache = ScanCache(CacheConfig(db_path=db_path))
     rows = await cache.query_cve_mirror(request.package, request.ecosystem.value)

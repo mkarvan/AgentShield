@@ -126,7 +126,23 @@ def render_markdown(report: PostureReport) -> str:
             lines += [f"| `{entry.package}` | {entry.ecosystem} | {sevs} | {logged} |"]
         lines += [""]
 
-    lines += ["---", "", "*AgentShield v0.1.0*"]
+    if report.drift_events:
+        lines += [
+            "## Drift Detected",
+            "",
+            f"**{len(report.drift_events)}** previously-allowed package(s) have regressed:",
+            "",
+            "| Package | Ecosystem | Severity | Previous | Current | Rule |",
+            "|---------|-----------|----------|----------|---------|------|",
+        ]
+        for ev in report.drift_events:
+            lines += [
+                f"| `{ev.package}` | {ev.ecosystem} | {ev.finding.severity.value} "
+                f"| {ev.previous_decision} | {ev.current_decision} | {ev.finding.rule_id} |"
+            ]
+        lines += [""]
+
+    lines += ["---", "", "*AgentShield*"]
     return "\n".join(lines)
 
 
@@ -263,3 +279,21 @@ def render_terminal(report: PostureReport) -> None:
     else:
         console.print("  [dim]No async-report log entries in the last 24 hours.[/dim]")
     console.print()
+
+    # Drift events
+    if report.drift_events:
+        console.rule("[bold yellow]DRIFT DETECTED[/bold yellow]")
+        console.print(
+            f"  [yellow]{len(report.drift_events)} previously-allowed package(s) have regressed:[/yellow]\n"
+        )
+        for ev in report.drift_events:
+            sev_color = _SEV_COLOR.get(ev.finding.severity.value, "white")
+            console.print(
+                f"  [{sev_color}]{ev.finding.severity.value}[/{sev_color}]  "
+                f"[bold]{ev.package}[/bold] ({ev.ecosystem})  "
+                f"[dim]{ev.previous_decision} → {ev.current_decision}[/dim]"
+            )
+            console.print(f"    {ev.finding.title}")
+            if ev.finding.remediation:
+                console.print(f"    [green]Fix: {ev.finding.remediation}[/green]")
+        console.print()

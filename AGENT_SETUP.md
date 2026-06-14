@@ -60,7 +60,7 @@ pip install "agentshield[all] @ git+https://github.com/mkarvan/AgentShield.git"
 ```bash
 agentshield --version
 ```
-Expected output: `agentshield, version 0.3.0` (or higher).
+Expected output: `agentshield, version 0.6.0` (or higher).
 
 If `agentshield` is not found, the pip bin directory may not be on PATH. Try:
 ```bash
@@ -126,6 +126,10 @@ ttl_hours = 24
 [reporting]
 report_dir          = "~/.agentshield/reports/"
 auto_report_on_exit = true
+
+[rate_limits]
+max_packages_per_hour    = 20    # block if agent installs > 20 packages/hour
+max_wheel_mb_per_session = 500   # block if total wheel downloads exceed 500 MB
 ```
 
 **Verify the config loads without errors:**
@@ -574,6 +578,9 @@ agentshield scan <package> --offline
 
 # Refresh vulnerability database
 agentshield cache warm
+
+# Check for drift in previously-allowed packages
+agentshield drift-check
 
 # Start MCP server (agents connect to this)
 agentshield serve --mcp

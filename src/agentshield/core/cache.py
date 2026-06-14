@@ -68,6 +68,22 @@ CREATE TABLE IF NOT EXISTS async_report_log (
     logged_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_async_log_logged ON async_report_log(logged_at);
+
+CREATE TABLE IF NOT EXISTS scan_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    package     TEXT NOT NULL,
+    ecosystem   TEXT NOT NULL,
+    decision    TEXT NOT NULL,
+    scanned_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scan_history_pkg ON scan_history(package, ecosystem, scanned_at);
+
+CREATE TABLE IF NOT EXISTS session_state (
+    session_id    TEXT PRIMARY KEY,
+    package_count INTEGER NOT NULL DEFAULT 0,
+    total_bytes   INTEGER NOT NULL DEFAULT 0,
+    window_start  INTEGER NOT NULL
+);
 """
 
 
@@ -317,3 +333,86 @@ class ScanCache:
             cur = await db.execute("DELETE FROM async_report_log")
             await db.commit()
             return cur.rowcount or 0
+
+    # ------------------------------------------------------------------ scan_history
+
+    async def record_scan_decision(
+        self,
+        package: str,
+        ecosystem: str,
+        decision: str,
+        scanned_at: int | None = None,
+    ) -> None:
+        """Record a scan decision in the scan_history table."""
+        ts = scanned_at if scanned_at is not None else int(time.time())
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            await db.execute(
+                "INSERT INTO scan_history (package, ecosystem, decision, scanned_at) VALUES (?,?,?,?)",
+                (package.lower(), ecosystem.lower(), decision, ts),
+            )
+            await db.commit()
+
+    async def get_last_decision(self, package: str, ecosystem: str) -> str | None:
+        """Return the most recent recorded decision for a package, or None."""
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            async with db.execute(
+                """SELECT decision FROM scan_history
+                   WHERE package = ? AND ecosystem = ?
+                   ORDER BY scanned_at DESC LIMIT 1""",
+                (package.lower(), ecosystem.lower()),
+            ) as cur:
+                row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def get_previously_allowed(self) -> list[tuple[str, str]]:
+        """Return (package, ecosystem) pairs whose last recorded decision is ALLOW."""
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            # Use MAX(id) — the AUTOINCREMENT column — to identify the most-recently
+            # inserted row, which is immune to same-second timestamp collisions.
+            async with db.execute(
+                """SELECT package, ecosystem
+                   FROM scan_history sh1
+                   WHERE decision = 'ALLOW'
+                   AND id = (
+                       SELECT MAX(id) FROM scan_history sh2
+                       WHERE sh2.package = sh1.package AND sh2.ecosystem = sh1.ecosystem
+                   )
+                   GROUP BY package, ecosystem"""
+            ) as cur:
+                rows = await cur.fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+    # ------------------------------------------------------------------ session_state
+
+    async def get_session_state(self, session_id: str) -> dict[str, Any] | None:
+        """Return the session state row for session_id, or None if not found."""
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM session_state WHERE session_id = ?",
+                (session_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def upsert_session_state(
+        self,
+        session_id: str,
+        package_count: int,
+        total_bytes: int,
+        window_start: int,
+    ) -> None:
+        """Insert or replace the session state row."""
+        async with aiosqlite.connect(self.config.db_path) as db:
+            await self._ensure_schema(db)
+            await db.execute(
+                """INSERT OR REPLACE INTO session_state
+                   (session_id, package_count, total_bytes, window_start)
+                   VALUES (?,?,?,?)""",
+                (session_id, package_count, total_bytes, window_start),
+            )
+            await db.commit()

@@ -9,6 +9,17 @@ from pydantic import BaseModel, Field
 from agentshield.core.models import Finding, Severity
 
 
+class DriftEvent(BaseModel):
+    """A drift event — records a security regression for a previously-allowed package."""
+
+    package: str
+    ecosystem: str
+    previous_decision: str
+    current_decision: str
+    finding: Finding
+    detected_at: datetime
+
+
 class AsyncLogEntry(BaseModel):
     """A single LOG_ASYNC decision recorded during a past scan."""
 
@@ -55,6 +66,7 @@ class PostureReport(BaseModel):
     env_vars_detected: list[str] = Field(default_factory=list)
     async_log_entries: list[AsyncLogEntry] = Field(default_factory=list)
     async_log_medium_plus_count: int = 0
+    drift_events: list[DriftEvent] = Field(default_factory=list)
 
     @property
     def high_risk_tools(self) -> list[ToolInfo]:

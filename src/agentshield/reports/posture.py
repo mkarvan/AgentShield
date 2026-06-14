@@ -22,7 +22,13 @@ from pathlib import Path
 from agentshield.core.cache import ScanCache
 from agentshield.core.config import CacheConfig
 from agentshield.core.models import Finding, Severity
-from agentshield.reports.models import AsyncLogEntry, PackageSummary, PostureReport, ToolInfo
+from agentshield.reports.models import (
+    AsyncLogEntry,
+    DriftEvent,
+    PackageSummary,
+    PostureReport,
+    ToolInfo,
+)
 from agentshield.reports.scoring import risk_label, risk_score
 
 _HIGH_RISK_TOOLS = frozenset(
@@ -181,6 +187,61 @@ async def _load_async_log(db_path: Path, since_hours: int = 24) -> list[AsyncLog
     return entries
 
 
+async def _load_drift_events(db_path: Path) -> list[DriftEvent]:
+    """Load recent drift events from scan_history using the AgentShield scanner."""
+    from agentshield.analyzers.drift_detector import DriftDetector
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import CacheConfig
+    from agentshield.core.models import DecisionAction, Ecosystem
+    from agentshield.core.scanner import AgentShield
+
+    cache = ScanCache(CacheConfig(db_path=db_path))
+    allowed_pairs = await cache.get_previously_allowed()
+    if not allowed_pairs:
+        return []
+
+    import asyncio
+
+    shield = AgentShield()
+    dd = DriftDetector(db_path)
+    events: list[DriftEvent] = []
+
+    _SEM = asyncio.Semaphore(5)
+
+    async def _check_one(pkg: str, eco_str: str) -> list[DriftEvent]:
+        async with _SEM:
+            try:
+                eco = Ecosystem(eco_str)
+            except ValueError:
+                return []
+            from agentshield.core.models import ScanRequest
+
+            req = ScanRequest(package=pkg, ecosystem=eco, source="posture")
+            result = await shield.ascan(req)
+            drift_fs = await dd.check(pkg, eco_str, result.decision.action)
+            if not drift_fs:
+                return []
+            return [
+                DriftEvent(
+                    package=pkg,
+                    ecosystem=eco_str,
+                    previous_decision=DecisionAction.ALLOW.value,
+                    current_decision=result.decision.action.value,
+                    finding=f,
+                    detected_at=datetime.now(UTC),
+                )
+                for f in drift_fs
+            ]
+
+    raw = await asyncio.gather(
+        *[_check_one(p, e) for p, e in allowed_pairs], return_exceptions=True
+    )
+    for r in raw:
+        if isinstance(r, list):
+            events.extend(r)
+    return events
+
+
 async def run_posture_check(
     db_path: Path,
     tool_names: list[str] | None = None,
@@ -241,6 +302,9 @@ async def run_posture_check(
         1 for entry in async_log_entries for f in entry.findings if f.severity >= Severity.MEDIUM
     )
 
+    # Drift events — re-scan previously-allowed packages
+    drift_events = await _load_drift_events(db_path)
+
     return PostureReport(
         generated_at=datetime.now(UTC),
         risk_score=score,
@@ -256,4 +320,5 @@ async def run_posture_check(
         env_vars_detected=env_vars,
         async_log_entries=async_log_entries,
         async_log_medium_plus_count=async_log_medium_plus,
+        drift_events=drift_events,
     )

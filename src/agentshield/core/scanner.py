@@ -113,6 +113,25 @@ class AgentShield:
                 cached = await self._add_transitive_results(request, cached)
             return cached
 
+        # Rate limit check — before running any online checks
+        from agentshield.core.rate_limiter import RateLimiter
+
+        rl = RateLimiter(self.config.cache.db_path, self.config.rate_limits)
+        rate_findings = await rl.check(request.package)
+        if rate_findings:
+            return ScanResult(
+                request=request,
+                findings=rate_findings,
+                max_severity=Severity.HIGH,
+                decision=Decision(
+                    action=DecisionAction.BLOCK,
+                    reason=rate_findings[0].title,
+                    findings=rate_findings,
+                ),
+                scan_duration_ms=int((time.monotonic() - start) * 1000),
+                cache_hit=False,
+            )
+
         # Run checks (online or offline depending on config)
         if self.config.offline:
             findings = await self._run_offline_checks(request)
@@ -131,6 +150,17 @@ class AgentShield:
             deep_findings = await self._run_deep_checks(request)
             findings = _dedupe_findings(findings + deep_findings)
 
+        # Drift detection — compare current decision against last recorded, emit D1.1 if regressed
+        from agentshield.analyzers.drift_detector import DriftDetector
+
+        dd = DriftDetector(self.config.cache.db_path)
+        base_decision = self.response_engine.decide(findings, request)
+        drift_findings = await dd.check(
+            request.package, request.ecosystem.value, base_decision.action
+        )
+        if drift_findings:
+            findings = _dedupe_findings(findings + drift_findings)
+
         max_sev = _max_severity(findings)
         decision = self.response_engine.decide(findings, request)
 
@@ -143,6 +173,9 @@ class AgentShield:
             cache_hit=False,
         )
         await self.cache.set(request, result)
+
+        # Record current base decision for future drift detection
+        await dd.record(request.package, request.ecosystem.value, base_decision.action)
 
         # Persist LOG_ASYNC decisions for posture report aggregation
         if decision.action == DecisionAction.LOG_ASYNC and findings:

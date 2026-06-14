@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![v0.3.0](https://img.shields.io/badge/version-0.3.0-brightgreen)](#)
+[![v0.6.0](https://img.shields.io/badge/version-0.6.0-brightgreen)](#)
 
 ---
 
@@ -43,6 +43,9 @@ AgentShield sits between the agent's intent ("install X") and the system executi
 - [SBOM generation](#sbom-generation)
 - [License compliance scanning](#license-compliance-scanning)
 - [pre-commit hook](#pre-commit-hook)
+- [GitHub Action](#github-action)
+- [Drift detection](#drift-detection)
+- [Rate limits](#rate-limits)
 - [Offline mode](#offline-mode)
 - [Caching](#caching)
 - [Contributing](#contributing)
@@ -1043,6 +1046,85 @@ The hook triggers on: `requirements*.txt`, `Pipfile.lock`, `package.json`, `pack
 **Exit codes:** `0` = all packages allowed, `1` = one or more blocked (commit aborted).
 
 See [`docs/pre-commit.md`](docs/pre-commit.md) for advanced configuration (custom config path, offline mode, allowlist setup).
+
+---
+
+## GitHub Action
+
+`agentshield-action` is a composite GitHub Action that scans manifest files in pull requests and posts a markdown security report as a PR comment.
+
+```yaml
+# .github/workflows/security-scan.yml
+name: Security Scan
+
+on:
+  pull_request:
+    paths: ["**/requirements*.txt", "**/package*.json", "**/Cargo.toml"]
+
+jobs:
+  agentshield:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/action/agentshield-action
+        with:
+          check-licenses: "true"
+          fail-on: HIGH
+```
+
+**Inputs:** `manifests` (glob pattern), `check-licenses` (bool), `fail-on` (severity threshold), `deep` (bool), `transitive` (bool), `github-token`.
+
+**Outputs:** `blocked`, `warned`, `total`, `report` (markdown text).
+
+The PR comment is updated in-place on re-runs — no duplicate comments. See [`docs/github-action.md`](docs/github-action.md) for full documentation and examples.
+
+---
+
+## Drift detection
+
+AgentShield records every scan decision in a local `scan_history` table. On each subsequent scan of the same package, the result is compared against the last recorded decision:
+
+| Transition | Finding | Severity |
+|------------|---------|----------|
+| ALLOW → BLOCK | D1.1 | HIGH |
+| ALLOW → WARN / LOG_ASYNC | D1.1 | MEDIUM |
+
+When drift is detected, a D1.1 Finding is added to the current scan result and surfaced in the response. The posture report also includes a **Drift Detected** section.
+
+```bash
+# Re-scan all previously-allowed packages and report any regressions
+agentshield drift-check
+
+# JSON output
+agentshield drift-check --format json
+```
+
+Exit code: `0` = no drift, `1` = one or more packages have regressed.
+
+---
+
+## Rate limits
+
+AgentShield tracks per-session package installation rates and cumulative wheel download size. Limits are enforced before online checks run — if a limit is exceeded, the scan returns a BLOCK decision with a R1.1 Finding (severity HIGH) immediately.
+
+### Configuration
+
+```toml
+[rate_limits]
+max_packages_per_hour    = 20    # max package scans per 1-hour window (default 20)
+max_wheel_mb_per_session = 500   # max wheel download MB across the entire session (default 500)
+```
+
+Session state is stored in SQLite and identified by the `AGENTSHIELD_SESSION_ID` env var (auto-generated UUID if unset, persists within a process).
+
+### Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `AGENTSHIELD_SESSION_ID` | Override the session ID (useful in multi-process setups) |
 
 ---
 

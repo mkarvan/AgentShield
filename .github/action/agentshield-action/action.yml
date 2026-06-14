@@ -1,0 +1,197 @@
+name: AgentShield Security Scan
+description: >
+  Scan changed manifest files for security vulnerabilities, license issues,
+  and malicious packages. Posts a markdown report as a PR comment.
+
+inputs:
+  manifests:
+    description: >
+      Glob pattern for manifest files to scan
+      (e.g. "**/requirements*.txt,**/package.json").
+      Defaults to all supported manifest types.
+    required: false
+    default: >-
+      **/requirements*.txt,
+      **/Pipfile.lock,
+      **/package.json,
+      **/package-lock.json,
+      **/Cargo.toml,
+      **/Cargo.lock,
+      **/pyproject.toml
+  check-licenses:
+    description: >
+      Enable license compliance checking (denylist mode).
+      Flags GPL, AGPL, SSPL, and other copyleft licenses.
+    required: false
+    default: "false"
+  fail-on:
+    description: >
+      Minimum severity that causes the action to fail: CRITICAL, HIGH, MEDIUM, LOW.
+      Default is CRITICAL (only fail when a package is blocked for a critical issue).
+    required: false
+    default: CRITICAL
+  deep:
+    description: >
+      Run deep static analysis (semgrep, bandit, AST inspection) in addition to
+      CVE lookups. Slower but more thorough.
+    required: false
+    default: "false"
+  transitive:
+    description: >
+      Resolve and scan transitive (indirect) dependencies.
+    required: false
+    default: "false"
+  github-token:
+    description: >
+      GitHub token used to post the PR comment.
+      Defaults to the built-in GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  blocked:
+    description: Number of packages blocked.
+    value: ${{ steps.scan.outputs.blocked }}
+  warned:
+    description: Number of packages with warnings.
+    value: ${{ steps.scan.outputs.warned }}
+  total:
+    description: Total number of packages scanned.
+    value: ${{ steps.scan.outputs.total }}
+  report:
+    description: Markdown scan report.
+    value: ${{ steps.scan.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install AgentShield
+      shell: bash
+      run: pip install agentshield
+
+    - name: Find manifest files
+      id: find
+      shell: bash
+      run: |
+        IFS=',' read -ra PATTERNS <<< "${{ inputs.manifests }}"
+        FILES=()
+        for pat in "${PATTERNS[@]}"; do
+          pat=$(echo "$pat" | xargs)
+          while IFS= read -r -d '' f; do
+            FILES+=("$f")
+          done < <(find . -path "./.git" -prune -o -name "$(basename "$pat")" -print0 2>/dev/null)
+        done
+        # De-duplicate
+        UNIQUE=$(printf '%s\n' "${FILES[@]}" | sort -u | tr '\n' ' ')
+        echo "files=$UNIQUE" >> "$GITHUB_OUTPUT"
+        echo "Found manifest files: $UNIQUE"
+
+    - name: Run AgentShield scan
+      id: scan
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        EXTRA_FLAGS=""
+        if [ "${{ inputs.check-licenses }}" = "true" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --check-licenses"
+        fi
+        if [ "${{ inputs.deep }}" = "true" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --deep"
+        fi
+        if [ "${{ inputs.transitive }}" = "true" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --transitive"
+        fi
+
+        BLOCKED=0
+        WARNED=0
+        TOTAL=0
+        FULL_REPORT="# AgentShield Security Scan\n\n"
+
+        for f in ${{ steps.find.outputs.files }}; do
+          if [ ! -f "$f" ]; then continue; fi
+          echo "Scanning $f ..."
+
+          REPORT=$(agentshield scan-file "$f" --format markdown $EXTRA_FLAGS 2>/dev/null || true)
+          FILE_BLOCKED=$(echo "$REPORT" | grep -c "BLOCK" || true)
+          FILE_WARNED=$(echo "$REPORT" | grep -c "WARN\|NEEDS_CONFIRMATION" || true)
+          FILE_TOTAL=$(agentshield scan-file "$f" --format json $EXTRA_FLAGS 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_packages',0))" 2>/dev/null || echo "0")
+
+          BLOCKED=$((BLOCKED + FILE_BLOCKED))
+          WARNED=$((WARNED + FILE_WARNED))
+          TOTAL=$((TOTAL + FILE_TOTAL))
+
+          FULL_REPORT+="## \`$f\`\n\n$REPORT\n\n"
+        done
+
+        # Write outputs
+        echo "blocked=$BLOCKED" >> "$GITHUB_OUTPUT"
+        echo "warned=$WARNED" >> "$GITHUB_OUTPUT"
+        echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+
+        # Write report to a temp file (handles multi-line)
+        printf '%b' "$FULL_REPORT" > /tmp/agentshield_report.md
+        {
+          echo 'report<<AGENTSHIELD_EOF'
+          cat /tmp/agentshield_report.md
+          echo 'AGENTSHIELD_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Post PR comment
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const body = fs.readFileSync('/tmp/agentshield_report.md', 'utf8');
+
+          // Update existing comment if one exists, otherwise create a new one
+          const marker = '<!-- agentshield-scan-result -->';
+          const fullBody = marker + '\n' + body;
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existing = comments.find(c => c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body: fullBody,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: fullBody,
+            });
+          }
+
+    - name: Enforce fail-on threshold
+      shell: bash
+      run: |
+        FAIL_ON="${{ inputs.fail-on }}"
+        BLOCKED="${{ steps.scan.outputs.blocked }}"
+
+        declare -A RANK=([NONE]=0 [INFO]=1 [LOW]=2 [MEDIUM]=3 [HIGH]=4 [CRITICAL]=5)
+        THRESHOLD=${RANK[$FAIL_ON]:-5}
+
+        if [ "$BLOCKED" -gt 0 ] && [ "$THRESHOLD" -le 4 ]; then
+          echo "AgentShield: $BLOCKED package(s) blocked. Failing because fail-on=$FAIL_ON."
+          exit 1
+        elif [ "$BLOCKED" -gt 0 ] && [ "$FAIL_ON" = "CRITICAL" ]; then
+          echo "AgentShield: $BLOCKED package(s) blocked."
+          exit 1
+        fi
+        echo "AgentShield: scan complete. Blocked=$BLOCKED Warned=${{ steps.scan.outputs.warned }} Total=${{ steps.scan.outputs.total }}"

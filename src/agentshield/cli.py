@@ -20,6 +20,7 @@ from agentshield.core.models import (
     DecisionAction,
     Ecosystem,
     FileScanResult,
+    Finding,
     ScanRequest,
     ScanResult,
 )
@@ -400,6 +401,104 @@ def sbom(
 
     if file_result.aggregate_decision.action == DecisionAction.BLOCK:
         raise typer.Exit(code=1)
+
+
+@app.command("drift-check")
+def drift_check(
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+    fmt: str = typer.Option("terminal", "--format", "-f", help="terminal|json"),
+) -> None:
+    """Re-scan all previously-allowed packages for new vulnerabilities.
+
+    \b
+    agentshield drift-check              # scan allowed packages, terminal output
+    agentshield drift-check --format json  # JSON output
+    """
+    from agentshield.core.config import Config
+
+    cfg = Config.load(config)
+    shield = AgentShield(config=cfg)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[cyan]Checking for drift in previously-allowed packages…[/cyan]"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("drift-check", total=None)
+        drift_results = asyncio.run(_cmd_drift_check(shield, cfg))
+
+    if fmt == "json":
+        import json as _json
+
+        output = [
+            {
+                "package": pkg,
+                "ecosystem": eco,
+                "finding": f.model_dump(),
+            }
+            for pkg, eco, f in drift_results
+        ]
+        console.print(_json.dumps(output, indent=2))
+        return
+
+    if not drift_results:
+        console.print(
+            "[green]No drift detected — all previously-allowed packages are still clean.[/green]"
+        )
+        return
+
+    console.print(
+        f"\n[bold yellow]Drift detected in {len(drift_results)} package(s):[/bold yellow]\n"
+    )
+    for pkg, eco, f in drift_results:
+        sev_color = {"HIGH": "orange3", "MEDIUM": "yellow"}.get(f.severity.value, "white")
+        console.print(
+            f"  [{sev_color}]{f.severity.value}[/{sev_color}]  "
+            f"[bold]{pkg}[/bold] ({eco})  [{f.rule_id}]"
+        )
+        console.print(f"    {f.title}")
+        if f.remediation:
+            console.print(f"    [dim]Fix: {f.remediation}[/dim]")
+        console.print()
+
+    raise typer.Exit(code=1)
+
+
+async def _cmd_drift_check(shield: AgentShield, cfg: object) -> list[tuple[str, str, Finding]]:
+    """Re-scan all previously-allowed packages and return (pkg, eco, finding) triples."""
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import Config
+
+    real_cfg: Config = cfg  # type: ignore[assignment]
+    cache = ScanCache(real_cfg.cache)
+    allowed_pairs = await cache.get_previously_allowed()
+
+    if not allowed_pairs:
+        return []
+
+    _CONCURRENCY = 5
+    sem = asyncio.Semaphore(_CONCURRENCY)
+
+    async def _rescan(pkg: str, eco_str: str) -> list[tuple[str, str, Finding]]:
+        async with sem:
+            try:
+                eco = Ecosystem(eco_str)
+            except ValueError:
+                return []
+            req = ScanRequest(package=pkg, ecosystem=eco, source="drift-check")
+            result = await shield.ascan(req)
+            # Collect D1.1 findings only
+            drift_findings = [f for f in result.findings if f.rule_id == "D1.1"]
+            return [(pkg, eco_str, f) for f in drift_findings]
+
+    raw = await asyncio.gather(*[_rescan(p, e) for p, e in allowed_pairs], return_exceptions=True)
+    out: list[tuple[str, str, Finding]] = []
+    for r in raw:
+        if isinstance(r, list):
+            out.extend(r)
+    return out
 
 
 @app.command()

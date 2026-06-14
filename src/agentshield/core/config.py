@@ -102,6 +102,20 @@ class LicensePolicy(BaseModel):
     allowed: list[str] = Field(default_factory=list)
 
 
+class RateLimitsConfig(BaseModel):
+    """Per-session rate limiting configuration.
+
+    Configure in config.toml under [rate_limits]:
+
+        [rate_limits]
+        max_packages_per_hour = 20
+        max_wheel_mb_per_session = 500
+    """
+
+    max_packages_per_hour: int = 20
+    max_wheel_mb_per_session: int = 500
+
+
 class Config(BaseModel):
     defaults: SeverityPolicy = Field(default_factory=SeverityPolicy)
     ecosystems: dict[str, SeverityPolicy] = Field(default_factory=dict)
@@ -112,6 +126,7 @@ class Config(BaseModel):
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
     api: APIConfig = Field(default_factory=APIConfig)
     license_policy: LicensePolicy = Field(default_factory=LicensePolicy)
+    rate_limits: RateLimitsConfig = Field(default_factory=RateLimitsConfig)
     offline: bool = False
 
     @model_validator(mode="before")

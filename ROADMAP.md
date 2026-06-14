@@ -95,24 +95,37 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - Triggers on: `requirements*.txt`, `Pipfile.lock`, `package-lock.json`, `package.json`, `Cargo.lock`, `Cargo.toml`, `pyproject.toml`
 - `docs/pre-commit.md` with setup and configuration instructions
 
-## v0.6.0 — Planned
+## v0.6.0 (done)
 
-### GitHub Action
+### GitHub Action (done)
 
-- `agentshield-action` — runs `agentshield scan-file` on changed manifest files in a PR
-- Posts a markdown report as a PR comment using the existing Markdown renderer
+- `.github/action/agentshield-action/action.yml` — composite action that runs `agentshield scan-file` on manifest files in a PR
+- Posts a markdown report as a PR comment; updates in-place on re-runs using an HTML marker
+- Inputs: `manifests` (glob), `check-licenses` (bool), `fail-on` (severity threshold), `deep` (bool), `transitive` (bool), `github-token`
+- Outputs: `blocked`, `warned`, `total`, `report`
+- `docs/github-action.md` with full usage instructions and examples
 
-### Drift detection
+### Drift detection (done)
 
-- Track ALLOW→BLOCK transitions for packages across scans
-- Surface drift events on next `agentshield scan` or `agentshield posture`
-- Store transition history in SQLite alongside the scan cache
+- `src/agentshield/analyzers/drift_detector.py` — `DriftDetector` class with `check()` and `record()` methods
+- `scan_history` SQLite table: package, ecosystem, decision, scanned_at, keyed by AUTOINCREMENT id
+- On each scan, compares current decision against last recorded: ALLOW→BLOCK = HIGH D1.1 finding, ALLOW→WARN = MEDIUM D1.1 finding
+- Wired into `scanner.py` — drift check and history recording run on every non-cached scan
+- `agentshield drift-check` CLI command — re-scans all previously-allowed packages, reports D1.1 findings
+- `DriftEvent` model in `reports/models.py`; `PostureReport.drift_events` field; `_load_drift_events()` in posture.py
+- Drift events section in markdown and terminal renderers
+- 14 unit tests in `tests/unit/test_drift_detector.py`
 
-### Agent behavior rate limits
+### Agent behavior rate limits (done)
 
-- Per-session limits: max packages per hour, max wheel download size per session
-- Session state persisted in SQLite
-- Configurable via `[rate_limits]` section in `config.toml`
+- `src/agentshield/core/rate_limiter.py` — `RateLimiter` class with `check()` method
+- `session_state` SQLite table: session_id, package_count, total_bytes, window_start
+- Session identified by `AGENTSHIELD_SESSION_ID` env var (auto-generated UUID if unset)
+- Checks: max packages per hour (default 20), max wheel MB per session (default 500)
+- Returns R1.1 Finding (severity HIGH) when either limit is exceeded; scanner converts to BLOCK
+- `RateLimitsConfig` in `config.py` — configurable via `[rate_limits]` in config.toml
+- Rate limit check inserted in `scanner.py` between cache lookup and network checks
+- 11 unit tests in `tests/unit/test_rate_limiter.py`
 
 ## v0.7.0 — Planned
 

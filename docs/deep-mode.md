@@ -11,6 +11,12 @@ registry into a temporary directory before analysis.  This is the core tension:
 the tool designed to protect you from malicious packages must briefly *fetch*
 the package before it can evaluate it.
 
+> **Scope: PyPI only.** Deep static analysis is currently implemented for the
+> PyPI ecosystem. For npm and cargo, `--deep` is a no-op beyond the standard
+> checks: it emits an informational `DEEP.UNSUPPORTED` finding (severity `INFO`,
+> source `deep_scan`) and skips extraction. CVE/advisory coverage for those
+> ecosystems still comes from the online checks (OSV / NVD / GitHub Advisory).
+
 ## Inherent risks
 
 ### 1. Download-time execution

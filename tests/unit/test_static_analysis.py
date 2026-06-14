@@ -269,3 +269,104 @@ async def test_deep_flag_true_invokes_static_analysis(tmp_path: Path):
     ):
         await shield.ascan(ScanRequest(package="some-pkg", ecosystem=Ecosystem.PYPI, deep=True))
         mock_deep.assert_called_once()
+
+
+# ── Deep scan: unsupported ecosystems are explicit, not silent no-ops ──────────
+
+
+def _shield(tmp_path: Path):
+    from agentshield.core.config import Config
+    from agentshield.core.scanner import AgentShield
+
+    cfg = Config.model_validate({"cache": {"db_path": str(tmp_path / "cache.db")}})
+    return AgentShield(config=cfg)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ecosystem", [Ecosystem.NPM, Ecosystem.CARGO])
+async def test_deep_checks_unsupported_ecosystem_returns_info_finding(
+    tmp_path: Path, ecosystem: Ecosystem
+):
+    """Deep scan for npm/cargo emits a clear INFO finding instead of a silent no-op."""
+    shield = _shield(tmp_path)
+
+    findings = await shield._run_deep_checks(
+        ScanRequest(package="some-pkg", ecosystem=ecosystem, deep=True)
+    )
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.rule_id == "DEEP.UNSUPPORTED"
+    assert f.severity == Severity.INFO
+    assert f.source == "deep_scan"
+    assert f.metadata["ecosystem"] == ecosystem.value
+    assert ecosystem.value in f.title
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ecosystem", [Ecosystem.NPM, Ecosystem.CARGO])
+async def test_deep_checks_unsupported_ecosystem_skips_extraction(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ecosystem: Ecosystem
+):
+    """npm/cargo deep scans must NOT attempt extraction (which only supports PyPI)."""
+    import agentshield.analyzers.wheel_extractor as we
+
+    def _boom(*args: object, **kwargs: object):
+        raise AssertionError("extracted_package must not be called for non-PyPI ecosystems")
+
+    monkeypatch.setattr(we, "extracted_package", _boom)
+
+    shield = _shield(tmp_path)
+    findings = await shield._run_deep_checks(
+        ScanRequest(package="some-pkg", ecosystem=ecosystem, deep=True)
+    )
+
+    assert [f.rule_id for f in findings] == ["DEEP.UNSUPPORTED"]
+
+
+@pytest.mark.asyncio
+async def test_deep_checks_pypi_attempts_extraction(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """PyPI deep scans still go through extracted_package and never emit DEEP.UNSUPPORTED."""
+    import agentshield.analyzers.wheel_extractor as we
+    from agentshield.analyzers.wheel_extractor import WheelExtractionError
+
+    called = False
+
+    def _fail(*args: object, **kwargs: object):
+        nonlocal called
+        called = True
+        raise WheelExtractionError("no network in test")
+
+    monkeypatch.setattr(we, "extracted_package", _fail)
+
+    shield = _shield(tmp_path)
+    findings = await shield._run_deep_checks(
+        ScanRequest(package="some-pkg", ecosystem=Ecosystem.PYPI, deep=True)
+    )
+
+    assert called is True
+    assert findings == []  # extraction failure is swallowed, no DEEP.UNSUPPORTED finding
+    assert all(f.rule_id != "DEEP.UNSUPPORTED" for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_deep_unsupported_finding_does_not_block(tmp_path: Path):
+    """The INFO DEEP.UNSUPPORTED finding must not escalate the scan decision."""
+    from unittest.mock import AsyncMock, patch
+
+    from agentshield.core.config import Config
+    from agentshield.core.models import DecisionAction
+    from agentshield.core.scanner import AgentShield
+
+    cfg = Config.model_validate({"cache": {"db_path": str(tmp_path / "cache.db")}, "offline": True})
+    shield = AgentShield(config=cfg)
+
+    with patch.object(shield, "_run_offline_checks", new_callable=AsyncMock, return_value=[]):
+        result = await shield.ascan(
+            ScanRequest(package="some-pkg", ecosystem=Ecosystem.NPM, deep=True)
+        )
+
+    assert "DEEP.UNSUPPORTED" in {f.rule_id for f in result.findings}
+    assert result.decision.action == DecisionAction.ALLOW

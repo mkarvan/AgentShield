@@ -301,15 +301,46 @@ class AgentShield:
         return _dedupe_findings(findings)
 
     async def _run_deep_checks(self, request: ScanRequest) -> list[Finding]:
-        """Download wheel and run static analysis suite (semgrep, bandit, AST inspector)."""
+        """Download the package artifact and run the static-analysis suite.
+
+        Deep static analysis is implemented for **PyPI only**: the wheel/sdist is
+        downloaded and extracted, then semgrep, bandit, and the AST inspector run
+        against the source. npm and cargo are not supported for deep scanning —
+        ``extracted_package`` only fetches PyPI artifacts, and ``npm audit`` /
+        ``cargo audit`` require a lockfile (``package-lock.json`` / ``Cargo.lock``)
+        that published registry artifacts do not ship. For those ecosystems we
+        emit an explicit informational finding instead of attempting an extraction
+        that always fails; CVE/advisory coverage still comes from the online
+        checks (OSV / NVD / GitHub Advisory) run in ``_run_checks``.
+        """
         from agentshield.analyzers.bandit_runner import run_bandit
-        from agentshield.analyzers.cargo_audit_runner import run_cargo_audit
-        from agentshield.analyzers.npm_audit_runner import run_npm_audit
         from agentshield.analyzers.semgrep_runner import run_semgrep
         from agentshield.analyzers.setup_py_inspector import inspect_package_directory
         from agentshield.analyzers.wheel_extractor import WheelExtractionError, extracted_package
         from agentshield.core.models import Ecosystem
         from agentshield.core.rate_limiter import RateLimiter
+
+        if request.ecosystem != Ecosystem.PYPI:
+            logger.info(
+                "Deep static analysis is not supported for ecosystem '%s' "
+                "(package '%s') — skipping; CVE/advisory checks still apply",
+                request.ecosystem.value,
+                request.package,
+            )
+            return [
+                Finding(
+                    rule_id="DEEP.UNSUPPORTED",
+                    title=f"Deep scan not supported for {request.ecosystem.value}",
+                    description=(
+                        f"Deep static analysis (--deep) is only implemented for PyPI; "
+                        f"ecosystem '{request.ecosystem.value}' was skipped. CVE and "
+                        f"advisory checks (OSV/NVD/GitHub) still ran for this package."
+                    ),
+                    severity=Severity.INFO,
+                    source="deep_scan",
+                    metadata={"ecosystem": request.ecosystem.value},
+                )
+            ]
 
         findings: list[Finding] = []
 
@@ -318,53 +349,32 @@ class AgentShield:
         rl = RateLimiter(self.config.cache.db_path, self.config.rate_limits)
         max_bytes = self.config.rate_limits.max_wheel_mb_per_session * 1024 * 1024
 
-        if request.ecosystem == Ecosystem.PYPI:
-            try:
-                async with extracted_package(
-                    request, max_bytes=max_bytes, on_download=rl.record_wheel_bytes
-                ) as pkg_dir:
-                    results = await asyncio.gather(
-                        run_semgrep(pkg_dir, request),
-                        run_bandit(pkg_dir, request),
-                        return_exceptions=True,
-                    )
-                    for name, r in zip(("semgrep", "bandit"), results, strict=False):
-                        if isinstance(r, list):
-                            findings.extend(r)
-                        elif isinstance(r, Exception):
-                            logger.warning("Deep check '%s' failed: %s", name, r)
+        try:
+            async with extracted_package(
+                request, max_bytes=max_bytes, on_download=rl.record_wheel_bytes
+            ) as pkg_dir:
+                results = await asyncio.gather(
+                    run_semgrep(pkg_dir, request),
+                    run_bandit(pkg_dir, request),
+                    return_exceptions=True,
+                )
+                for name, r in zip(("semgrep", "bandit"), results, strict=False):
+                    if isinstance(r, list):
+                        findings.extend(r)
+                    elif isinstance(r, Exception):
+                        logger.warning("Deep check '%s' failed: %s", name, r)
 
-                    # AST inspector is synchronous; run directly
-                    try:
-                        ast_findings = inspect_package_directory(pkg_dir, request)
-                        findings.extend(ast_findings)
-                    except Exception as exc:
-                        logger.warning("setup_py_inspector failed: %s", exc)
+                # AST inspector is synchronous; run directly
+                try:
+                    ast_findings = inspect_package_directory(pkg_dir, request)
+                    findings.extend(ast_findings)
+                except Exception as exc:
+                    logger.warning("setup_py_inspector failed: %s", exc)
 
-            except WheelExtractionError as exc:
-                logger.warning("Could not download/extract package for deep scan: %s", exc)
-            except Exception as exc:
-                logger.warning("Deep scan failed with unexpected error: %s", exc)
-
-        elif request.ecosystem == Ecosystem.NPM:
-            try:
-                async with extracted_package(
-                    request, max_bytes=max_bytes, on_download=rl.record_wheel_bytes
-                ) as pkg_dir:
-                    npm_findings = await run_npm_audit(pkg_dir, request)
-                    findings.extend(npm_findings)
-            except Exception as exc:
-                logger.warning("npm deep scan failed: %s", exc)
-
-        elif request.ecosystem == Ecosystem.CARGO:
-            try:
-                async with extracted_package(
-                    request, max_bytes=max_bytes, on_download=rl.record_wheel_bytes
-                ) as pkg_dir:
-                    cargo_findings = await run_cargo_audit(pkg_dir, request)
-                    findings.extend(cargo_findings)
-            except Exception as exc:
-                logger.warning("cargo deep scan failed: %s", exc)
+        except WheelExtractionError as exc:
+            logger.warning("Could not download/extract package for deep scan: %s", exc)
+        except Exception as exc:
+            logger.warning("Deep scan failed with unexpected error: %s", exc)
 
         return findings
 

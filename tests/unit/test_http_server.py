@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-from agentshield.server.http_server import HTTPServer
 from agentshield.core.models import (
     Decision,
     DecisionAction,
@@ -17,7 +14,7 @@ from agentshield.core.models import (
     ScanResult,
     Severity,
 )
-
+from agentshield.server.http_server import HTTPServer
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -165,7 +162,6 @@ def test_custom_host_and_port() -> None:
 
 
 def test_write_response_produces_valid_http() -> None:
-    import asyncio
 
     written: list[bytes] = []
 

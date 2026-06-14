@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from agentshield.analyzers.dockerfile_scanner import _exec_form_to_shell, parse_dockerfile
 from agentshield.core.models import Ecosystem
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -118,10 +115,7 @@ def test_line_continuation(tmp_path: Path) -> None:
 
 def test_multiple_run_commands(tmp_path: Path) -> None:
     content = (
-        "FROM python:3.11\n"
-        "RUN pip install requests\n"
-        "RUN npm install lodash\n"
-        "RUN cargo add serde\n"
+        "FROM python:3.11\nRUN pip install requests\nRUN npm install lodash\nRUN cargo add serde\n"
     )
     p = _write_dockerfile(tmp_path, content)
     reqs = parse_dockerfile(p)
@@ -146,9 +140,7 @@ def test_deduplication(tmp_path: Path) -> None:
 
 
 def test_exec_form_run(tmp_path: Path) -> None:
-    p = _write_dockerfile(
-        tmp_path, 'RUN ["pip", "install", "requests", "flask"]\n'
-    )
+    p = _write_dockerfile(tmp_path, 'RUN ["pip", "install", "requests", "flask"]\n')
     reqs = parse_dockerfile(p)
     pkgs = {r.package for r in reqs}
     assert "requests" in pkgs
@@ -159,7 +151,7 @@ def test_exec_form_run(tmp_path: Path) -> None:
 
 
 def test_no_install_commands(tmp_path: Path) -> None:
-    p = _write_dockerfile(tmp_path, "FROM python:3.11\nRUN echo hello\nCMD [\"python\", \"app.py\"]\n")
+    p = _write_dockerfile(tmp_path, 'FROM python:3.11\nRUN echo hello\nCMD ["python", "app.py"]\n')
     reqs = parse_dockerfile(p)
     assert reqs == []
 

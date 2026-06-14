@@ -9,7 +9,6 @@ import pytest
 
 from agentshield.analyzers.diff_scanner import (
     DiffScanResult,
-    PackageDelta,
     compute_delta,
     run_diff_scan,
 )
@@ -21,7 +20,6 @@ from agentshield.core.models import (
     ScanResult,
     Severity,
 )
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

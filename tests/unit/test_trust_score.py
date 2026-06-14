@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-import respx
 import httpx
+import respx
 
 from agentshield.analyzers.trust_score import (
     TrustScoreResult,
@@ -12,7 +11,6 @@ from agentshield.analyzers.trust_score import (
     compute_trust_score,
 )
 from agentshield.core.models import Ecosystem, ScanRequest, Severity
-
 
 # ── _score_to_label ───────────────────────────────────────────────────────────
 
@@ -86,9 +84,7 @@ def test_to_finding_boundary_50() -> None:
 
 @respx.mock
 async def test_compute_trust_score_returns_neutral_on_404() -> None:
-    respx.get("https://pypi.org/pypi/unknown-pkg-xyz/json").mock(
-        return_value=httpx.Response(404)
-    )
+    respx.get("https://pypi.org/pypi/unknown-pkg-xyz/json").mock(return_value=httpx.Response(404))
     req = ScanRequest(package="unknown-pkg-xyz", ecosystem=Ecosystem.PYPI)
     result = await compute_trust_score(req)
     assert isinstance(result.score, int)
@@ -107,9 +103,7 @@ async def test_compute_trust_score_pypi_happy_path() -> None:
                     "author": "Kenneth Reitz",
                     "home_page": "https://requests.readthedocs.io",
                 },
-                "urls": [
-                    {"upload_time_iso_8601": "2018-06-15T00:00:00+00:00"}
-                ],
+                "urls": [{"upload_time_iso_8601": "2018-06-15T00:00:00+00:00"}],
                 "releases": {str(i): [] for i in range(50)},
             },
         )

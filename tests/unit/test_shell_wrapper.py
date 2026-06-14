@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agentshield.guard.shell_wrapper import (
-    ShellGuard,
     _BASH_INIT,
     _FISH_INIT,
     _ZSH_INIT,
+    ShellGuard,
 )
-
 
 # ── generate_guard_script ─────────────────────────────────────────────────────
 
@@ -119,8 +116,8 @@ def test_fish_script_aborts_on_block() -> None:
 
 
 def test_hermes_parse_used_for_guard() -> None:
-    from agentshield.integrations.hermes.plugin import _parse_shell_packages
     from agentshield.core.models import Ecosystem
+    from agentshield.integrations.hermes.plugin import _parse_shell_packages
 
     pkgs = _parse_shell_packages("pip install requests flask")
     assert ("requests", Ecosystem.PYPI) in pkgs
@@ -128,16 +125,16 @@ def test_hermes_parse_used_for_guard() -> None:
 
 
 def test_hermes_parse_npm_for_guard() -> None:
-    from agentshield.integrations.hermes.plugin import _parse_shell_packages
     from agentshield.core.models import Ecosystem
+    from agentshield.integrations.hermes.plugin import _parse_shell_packages
 
     pkgs = _parse_shell_packages("npm install lodash")
     assert ("lodash", Ecosystem.NPM) in pkgs
 
 
 def test_hermes_parse_cargo_for_guard() -> None:
-    from agentshield.integrations.hermes.plugin import _parse_shell_packages
     from agentshield.core.models import Ecosystem
+    from agentshield.integrations.hermes.plugin import _parse_shell_packages
 
     pkgs = _parse_shell_packages("cargo add serde")
     assert ("serde", Ecosystem.CARGO) in pkgs

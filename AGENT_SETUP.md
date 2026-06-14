@@ -60,7 +60,7 @@ pip install "agentshield[all] @ git+https://github.com/mkarvan/AgentShield.git"
 ```bash
 agentshield --version
 ```
-Expected output: `agentshield, version 0.1.0` (or higher).
+Expected output: `agentshield, version 0.3.0` (or higher).
 
 If `agentshield` is not found, the pip bin directory may not be on PATH. Try:
 ```bash
@@ -375,6 +375,7 @@ Expected response: JSON with `"decision": "ALLOW"` and an empty or populated fin
 | `agentshield_scan` | Before any pip install / npm install / cargo add |
 | `agentshield_scan_file` | To scan all packages in a requirements.txt / package.json / Cargo.toml at once |
 | `agentshield_posture` | To get a full security posture report |
+| `agentshield_sbom` | To generate a CycloneDX v1.4 JSON SBOM from a manifest file |
 
 **Important — instruct your agent to use AgentShield:**
 
@@ -390,14 +391,17 @@ When working with a manifest file (requirements.txt, package.json, Cargo.toml),
 use agentshield_scan_file instead — it scans all packages in the file at once.
 If any package is BLOCKED, do not proceed with the bulk install.
 
-Pass context_hint to explain why you want the package.
+To generate a Software Bill of Materials for a project, call agentshield_sbom
+with the path to the manifest file. It returns CycloneDX v1.4 JSON.
+
+Pass context_hint to agentshield_scan to explain why you want the package.
 ```
 
 ---
 
-### Framework: Claude Code (hooks, post-v0.1.0)
+### Framework: Claude Code
 
-Claude Code hook support for AgentShield is planned for the next release. For now, use the MCP server option above — Claude Code supports MCP and this is the recommended path.
+A native Claude Code hook integration (via `agentshield.integrations.claude_code`) is reserved for a future release — importing it currently raises `NotImplementedError`. Use the MCP server option above instead: Claude Code fully supports MCP and `agentshield serve --mcp` is the recommended path for Claude Code users.
 
 ---
 
@@ -525,6 +529,8 @@ kill $SHIELD_PID
 ```
 Expected: `{"jsonrpc":"2.0","id":1,"result":{"pong":true}}`
 
+**Note on authentication:** On Linux and macOS the server uses peer credential checks (same UID) automatically — `nc` will work without any special handshake. On other platforms a shared-secret token is written to `~/.agentshield/ipc.token` (mode 0o600); clients must send `AUTH <token>\n` before the first JSON-RPC message.
+
 **6f. Manifest file scan:**
 ```bash
 echo -e "requests\nflask" > /tmp/test-req.txt
@@ -549,6 +555,13 @@ agentshield scan <package> --deep
 agentshield scan-file requirements.txt
 agentshield scan-file package.json
 agentshield scan-file Cargo.toml
+
+# Scan package + its full dependency tree
+agentshield scan <package> --transitive
+
+# Generate a CycloneDX SBOM from a manifest
+agentshield sbom requirements.txt
+agentshield sbom package.json -o sbom.json
 
 # View async report log + installed package CVEs
 agentshield posture
@@ -601,7 +614,7 @@ agentshield cache stats
 
 If you see an error about the DB path, the config file may have a syntax error. Validate with:
 ```bash
-python3 -c "import toml; toml.load(open('~/.config/agentshield/config.toml'.replace('~', __import__('os').path.expanduser('~'))))"
+python3 -c "import tomllib, pathlib; tomllib.loads(pathlib.Path('~/.config/agentshield/config.toml').expanduser().read_text())"
 ```
 
 ---

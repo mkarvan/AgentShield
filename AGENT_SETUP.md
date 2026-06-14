@@ -396,6 +396,88 @@ Claude Code hook support for AgentShield is planned for the next release. For no
 
 ---
 
+### Framework: Shell wrapper (any agent)
+
+This approach works with **any agent that runs shell commands** — no framework-specific integration needed. Instead of calling `pip install` directly, the agent (or user) calls a wrapper script that scans with AgentShield first.
+
+This pattern was validated in production with Hermes Agent, which created and used it autonomously during live testing.
+
+**Step 5a — Create the wrapper script**
+
+Save the following to `~/safe-pip-install.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+PACKAGE="$1"
+shift  # remaining args passed to pip install
+
+echo "=== AgentShield: scanning $PACKAGE ==="
+if ! agentshield scan "$PACKAGE" --ecosystem pypi; then
+    echo "=== BLOCKED: AgentShield found security issues with $PACKAGE ==="
+    exit 1
+fi
+
+echo "=== Scan passed. Proceeding with pip install $PACKAGE $* ==="
+exec pip install "$PACKAGE" "$@"
+```
+
+```bash
+chmod +x ~/safe-pip-install.sh
+```
+
+**Step 5b — Add shell aliases (optional)**
+
+Add to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+# AgentShield guards — always scan before install
+alias safe-pip-install='~/safe-pip-install.sh'
+```
+
+**Step 5c — Equivalent wrappers for npm and cargo**
+
+For npm:
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+PACKAGE="$1"; shift
+agentshield scan "$PACKAGE" --ecosystem npm || { echo "BLOCKED by AgentShield"; exit 1; }
+exec npm install "$PACKAGE" "$@"
+```
+
+For cargo:
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+PACKAGE="$1"; shift
+agentshield scan "$PACKAGE" --ecosystem cargo || { echo "BLOCKED by AgentShield"; exit 1; }
+exec cargo add "$PACKAGE" "$@"
+```
+
+**Step 5d — Instruct your agent to use the wrapper**
+
+Add to your agent's system prompt or instructions:
+
+```
+When installing packages, always use the safe-install wrappers:
+- Python: ~/safe-pip-install.sh <package> [pip flags...]
+- npm: ~/safe-npm-install.sh <package> [npm flags...]
+- cargo: ~/safe-cargo-add.sh <package> [cargo flags...]
+
+If the wrapper exits with code 1, do NOT proceed with the install.
+Report the security findings to the user.
+```
+
+**Why this works well:**
+- No plugin/MCP setup required — pure shell
+- Works with any agent that can run bash commands
+- The agent doesn't need to know about AgentShield — the wrapper handles everything
+- Easy to audit and customize
+
+---
+
 ## Step 6 — Verify the full setup
 
 Run these verification commands to confirm everything is working.

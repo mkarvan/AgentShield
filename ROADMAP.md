@@ -47,7 +47,7 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - Added exponential backoff with jitter for 429/5xx responses in OSV and deps resolver
 - Shared `httpx.AsyncClient` across deps resolver hops for connection pooling
 
-## v0.3.0
+## v0.3.0 (done)
 
 ### Testing (done)
 
@@ -58,11 +58,20 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - Claude Code stub now raises `NotImplementedError` on import with actionable message
 - `prompt_injection.py` converted to async interface; scanner and all tests updated
 
-### Remaining — Planned
+### Security (done)
 
-- IPC socket authentication — add SO_PEERCRED check or shared secret
-- SBOM generation and lockfile auditing
-- Curated malicious package list expansion — current list is static and incomplete
-- Clarify `DecisionAction.NEEDS_CONFIRMATION` vs `WARN_CONFIRM` distinction in docs
-- `--deep` mode supply chain risk documentation — downloading packages for analysis has inherent risk
+- IPC socket authentication — SO_PEERCRED on Linux, LOCAL_PEERCRED on macOS, shared-secret token fallback on other platforms. 28 new tests.
+
+### Features (done)
+
+- SBOM generation — CycloneDX v1.4 JSON output with PURL identifiers and vulnerability mapping. CLI `agentshield sbom`, MCP tool `agentshield_sbom`. 40 new tests.
+- Curated malicious package list expanded from ~68 to ~120+ entries across PyPI and npm
+
+### Documentation (done)
+
+- `DecisionAction` docstring clarifying `NEEDS_CONFIRMATION` vs `WARN_CONFIRM` and the `ResponseMode→DecisionAction` mapping
+- `docs/deep-mode.md` documenting `--deep` mode supply chain risks and mitigations
+
+## v0.4.0 — Planned
+
 - PyPI publishing (blocked by name conflict — `agentshield` taken by another maintainer)

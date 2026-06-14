@@ -41,20 +41,60 @@ class AgentShield:
         """Synchronous scan — wraps ascan(). Prefer ascan() in async contexts."""
         return asyncio.run(self.ascan(request))
 
-    def scan_file(self, path: Path | str) -> FileScanResult:
+    def scan_file(
+        self,
+        path: Path | str,
+        *,
+        check_licenses: bool = False,
+        deep: bool = False,
+        transitive: bool = False,
+        transitive_depth: int = 3,
+    ) -> FileScanResult:
         """Synchronous manifest scan — wraps ascan_file(). Prefer ascan_file() in async contexts."""
-        return asyncio.run(self.ascan_file(path))
+        return asyncio.run(
+            self.ascan_file(
+                path,
+                check_licenses=check_licenses,
+                deep=deep,
+                transitive=transitive,
+                transitive_depth=transitive_depth,
+            )
+        )
 
-    async def ascan_file(self, path: Path | str) -> FileScanResult:
+    async def ascan_file(
+        self,
+        path: Path | str,
+        *,
+        check_licenses: bool = False,
+        deep: bool = False,
+        transitive: bool = False,
+        transitive_depth: int = 3,
+    ) -> FileScanResult:
         """Scan all packages declared in a manifest file.
 
         Auto-detects format from the filename (requirements.txt, package.json,
         Cargo.toml, package-lock.json). Returns an aggregate FileScanResult.
+
+        Optional keyword arguments are applied to every ScanRequest created from
+        the manifest, mirroring the single-package ``agentshield scan`` flags.
         """
         from agentshield.core.manifest import parse_manifest
 
         file_path = Path(path)
         requests = parse_manifest(file_path)
+
+        if check_licenses or deep or transitive:
+            requests = [
+                req.model_copy(
+                    update={
+                        "check_licenses": check_licenses or req.check_licenses,
+                        "deep": deep or req.deep,
+                        "transitive": transitive or req.transitive,
+                        "transitive_depth": transitive_depth,
+                    }
+                )
+                for req in requests
+            ]
 
         _FILE_SCAN_CONCURRENCY = 10
         sem = asyncio.Semaphore(_FILE_SCAN_CONCURRENCY)

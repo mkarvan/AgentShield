@@ -371,6 +371,20 @@ def scan_file(
     ),
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
     offline: bool = typer.Option(False, "--offline", help="Use only local DB — no network calls"),
+    deep: bool = typer.Option(
+        False, "--deep", help="Run static analysis in addition to CVE lookups"
+    ),
+    transitive: bool = typer.Option(
+        False, "--transitive", "-T", help="Resolve and scan transitive dependencies"
+    ),
+    transitive_depth: int = typer.Option(
+        3, "--transitive-depth", help="Maximum depth for transitive dependency resolution (1-10)"
+    ),
+    check_licenses: bool = typer.Option(
+        False,
+        "--check-licenses",
+        help="Check package licenses against the configured license policy (default: denylist)",
+    ),
 ) -> None:
     """Scan all packages declared in a manifest file.
 
@@ -396,7 +410,15 @@ def scan_file(
         transient=True,
     ) as progress:
         progress.add_task("scan-file", total=None)
-        result = asyncio.run(shield.ascan_file(path))
+        result = asyncio.run(
+            shield.ascan_file(
+                path,
+                check_licenses=check_licenses,
+                deep=deep,
+                transitive=transitive,
+                transitive_depth=transitive_depth,
+            )
+        )
 
     _print_file_result(result)
 

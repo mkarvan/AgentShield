@@ -60,7 +60,7 @@ pip install "agentshield[all] @ git+https://github.com/mkarvan/AgentShield.git"
 ```bash
 agentshield --version
 ```
-Expected output: `agentshield, version 0.7.0` (or higher).
+Expected output: `agentshield 0.7.0` (or higher).
 
 If `agentshield` is not found, the pip bin directory may not be on PATH. Try:
 ```bash

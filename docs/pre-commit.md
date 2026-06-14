@@ -15,7 +15,7 @@ AgentShield ships a [pre-commit](https://pre-commit.com/) hook that scans manife
 ```yaml
 repos:
   - repo: https://github.com/mkarvan/AgentShield
-    rev: v0.5.0          # pin to a specific tag or commit
+    rev: v0.7.0          # pin to a specific tag or commit
     hooks:
       - id: agentshield-scan
 ```
@@ -78,7 +78,7 @@ Then reference it in `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/mkarvan/AgentShield
-    rev: v0.5.0
+    rev: v0.7.0
     hooks:
       - id: agentshield-scan
         args: ["--config", ".agentshield.toml"]

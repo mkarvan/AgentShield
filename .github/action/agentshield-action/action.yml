@@ -78,7 +78,7 @@ runs:
 
     - name: Install AgentShield
       shell: bash
-      run: pip install agentshield==${{ inputs.version }}
+      run: pip install "git+https://github.com/mkarvan/AgentShield.git@v${{ inputs.version }}"
 
     - name: Find manifest files
       id: find
@@ -123,16 +123,25 @@ runs:
           if [ ! -f "$f" ]; then continue; fi
           echo "Scanning $f ..."
 
-          REPORT=$(agentshield scan-file "$f" --format markdown $EXTRA_FLAGS 2>/dev/null || true)
-          FILE_BLOCKED=$(echo "$REPORT" | grep -c "BLOCK" || true)
-          FILE_WARNED=$(echo "$REPORT" | grep -c "WARN\|NEEDS_CONFIRMATION" || true)
-          FILE_TOTAL=$(agentshield scan-file "$f" --format json $EXTRA_FLAGS 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_packages',0))" 2>/dev/null || echo "0")
+          set +e
+          REPORT=$(NO_COLOR=1 agentshield scan-file "$f" $EXTRA_FLAGS 2>&1)
+          FILE_EXIT=$?
+          set -e
+
+          FILE_BLOCKED=$(echo "$REPORT" | grep -cE '\bBLOCK\b' || true)
+          FILE_WARNED=$(echo "$REPORT" | grep -cE '\bNEEDS_CONFIRMATION\b|\bLOG_ASYNC\b' || true)
+          FILE_TOTAL=$(echo "$REPORT" | grep -oE 'Packages: [0-9]+' | grep -oE '[0-9]+' | head -1 || echo 0)
+
+          # If the command exited non-zero but grep found no BLOCK lines, record one block
+          if [ "$FILE_EXIT" -ne 0 ] && [ "$FILE_BLOCKED" -eq 0 ]; then
+            FILE_BLOCKED=1
+          fi
 
           BLOCKED=$((BLOCKED + FILE_BLOCKED))
           WARNED=$((WARNED + FILE_WARNED))
           TOTAL=$((TOTAL + FILE_TOTAL))
 
-          FULL_REPORT+="## \`$f\`\n\n$REPORT\n\n"
+          FULL_REPORT+="## \`$f\`\n\n\`\`\`\n$REPORT\n\`\`\`\n\n"
         done
 
         # Write outputs

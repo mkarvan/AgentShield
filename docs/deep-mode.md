@@ -24,11 +24,12 @@ the package before it can evaluate it.
 Some malicious packages run code during installation or even during extraction.
 Specifically:
 
-- **`setup.py` execution** — `pip download` (used internally) can trigger
-  `setup.py` code when building a source distribution (sdist).  AgentShield
-  uses `--no-deps --no-build-isolation` flags to minimise this, but it cannot
-  fully prevent execution if the tarball's `setup.py` hooks fire during
-  metadata extraction.
+- **`setup.py` execution** — AgentShield downloads the wheel or sdist
+  directly from the PyPI registry via HTTPS (using httpx) and extracts it
+  with Python's built-in `zipfile`/`tarfile` — it does *not* invoke
+  `pip download` or `pip install`, so `setup.py` is never executed during
+  download or extraction.  The analysis runs entirely on the unpacked source
+  tree.
 
 - **Malicious archive payloads** — A crafted wheel or tarball could contain
   files with names designed to escape the temporary directory (path traversal).
@@ -62,7 +63,7 @@ significantly.
 | Risk | Mitigation |
 |------|-----------|
 | Path traversal (zip-slip) | Member path validated against extraction root before extraction |
-| `setup.py` execution | Downloads use `--no-deps --no-build-isolation`; sdist extraction skips `setup.py` |
+| `setup.py` execution | Archive downloaded directly via HTTPS (no pip); `zipfile`/`tarfile` extraction never runs `setup.py` |
 | Symlink escape | Symlinks outside the target directory are rejected |
 | Malicious `tar` entries | Python 3.12 `filter="data"` or manual tar-slip guard on 3.11 |
 | Oversized download | Download capped at `max_wheel_mb_per_session` (aborts mid-stream); per-session total enforced by the rate limiter |

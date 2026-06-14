@@ -217,7 +217,7 @@ pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.gi
 # OpenClaw integration
 pip install "agentshield[openclaw] @ git+https://github.com/mkarvan/AgentShield.git"
 
-# Everything
+# Hermes + static analysis (the [all] bundle)
 pip install "agentshield[all] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
@@ -436,7 +436,12 @@ Arguments:
             Cargo.toml
 
 Options:
-  -c, --config PATH   Path to config.toml (default: ~/.config/agentshield/config.toml)
+  -c, --config PATH          Path to config.toml (default: ~/.config/agentshield/config.toml)
+  --offline                  Local DB only — no network calls
+  --deep                     Download wheels and run static analysis on each package
+  -T, --transitive           Resolve and scan transitive dependencies
+  --transitive-depth INT     Maximum resolution depth (default: 3, range 1–10)
+  --check-licenses           Enable license compliance check (denylist mode with defaults)
 ```
 
 **Format detection:** The format is auto-detected from the filename. If the filename is not a standard name, the file extension is used as a fallback (`.txt` → requirements, `.json` → package.json, `.toml` → Cargo.toml).
@@ -452,6 +457,8 @@ agentshield scan-file test-requirements.txt
 agentshield scan-file package.json
 agentshield scan-file package-lock.json
 agentshield scan-file Cargo.toml
+agentshield scan-file requirements.txt --check-licenses
+agentshield scan-file requirements.txt --deep --transitive
 agentshield scan-file /path/to/dev-requirements.txt -c /custom/config.toml
 ```
 
@@ -468,6 +475,7 @@ Arguments:
 Options:
   -o, --output PATH   Write SBOM to file (default: stdout)
   -c, --config PATH   Path to config.toml
+  --offline           Local DB only — no network calls
 ```
 
 The SBOM includes PURL identifiers for every package and maps any vulnerability findings to their corresponding component entries.
@@ -541,15 +549,22 @@ Start the AgentShield daemon.
 agentshield serve [OPTIONS]
 
 Options:
-  --mcp              Run as MCP stdio tool server (for any MCP-compatible agent)
-  --socket PATH      Unix socket path (default: ~/.agentshield/agentshield.sock)
+  --mcp                  Run as MCP stdio tool server (for any MCP-compatible agent)
+  --http                 Run as HTTP REST server on localhost (default port 8765)
+  --port, -p INT         Port for the HTTP server (default: 8765)
+  --allowed-dirs PATH    Comma-separated extra directories allowed for /scan-file and /sbom.
+                         Also accepted via AGENTSHIELD_ALLOWED_DIRS (colon-separated).
+  --socket PATH          Unix socket path (default: ~/.agentshield/agentshield.sock)
   -c, --config PATH
 ```
 
 ```bash
-agentshield serve           # Unix socket JSON-RPC IPC daemon
-agentshield serve --mcp     # MCP tool server on stdio
-agentshield serve --socket /tmp/my.sock
+agentshield serve                                        # Unix socket JSON-RPC IPC daemon
+agentshield serve --mcp                                  # MCP tool server on stdio
+agentshield serve --http                                 # HTTP REST server on localhost:8765
+agentshield serve --http --port 9000                     # custom port
+agentshield serve --http --allowed-dirs /ci/workspace    # expand path allowlist
+agentshield serve --socket /tmp/my.sock                  # custom IPC socket path
 ```
 
 ---
@@ -653,40 +668,48 @@ SkillResult(
 
 | Tool name | Description |
 |-----------|-------------|
-| `agentshield_scan` | Scan a package; returns decision, findings, max severity |
+| `agentshield_scan` | Scan a package; returns decision, findings, max severity, trust score |
 | `agentshield_scan_file` | Scan all packages in a manifest file |
 | `agentshield_posture` | Run posture check; returns full JSON report |
 | `agentshield_sbom` | Generate a CycloneDX v1.4 JSON SBOM from a manifest file |
+| `agentshield_diff_scan` | Scan only changed packages between two manifest snapshots |
+| `agentshield_scan_docker` | Scan packages from `RUN pip/npm/cargo install` in a Dockerfile |
 
 **`agentshield_scan` input schema:**
 ```json
 {
-  "package":      "string (required)  — package name",
-  "ecosystem":    "pypi | npm | cargo (required)",
-  "version":      "string (optional)  — pinned version",
-  "deep":         "boolean (optional) — default false",
-  "context_hint": "string (optional)  — why the agent wants this package (enables T4.1)"
+  "package":          "string (required)  — package name",
+  "ecosystem":        "pypi | npm | cargo (required)",
+  "version":          "string (optional)  — pinned version",
+  "deep":             "boolean (optional) — default false",
+  "context_hint":     "string (optional)  — why the agent wants this package (enables T4.1)",
+  "transitive":       "boolean (optional) — resolve and scan all transitive deps (default false)",
+  "transitive_depth": "integer (optional) — max resolution depth 1–10 (default 3)",
+  "check_licenses":   "boolean (optional) — check license policy (default false)"
 }
 ```
 
 **Response:**
 ```json
 {
-  "decision":        "ALLOW | BLOCK | NEEDS_CONFIRMATION | LOG_ASYNC",
-  "reason":          "human-readable explanation",
-  "max_severity":    "NONE | INFO | LOW | MEDIUM | HIGH | CRITICAL",
-  "cache_hit":       true,
-  "scan_duration_ms": 42,
+  "decision":          "ALLOW | BLOCK | NEEDS_CONFIRMATION | LOG_ASYNC",
+  "reason":            "human-readable explanation",
+  "max_severity":      "NONE | INFO | LOW | MEDIUM | HIGH | CRITICAL",
+  "trust_score":       87,
+  "trust_label":       "high-trust | moderate | low-trust | suspicious",
+  "cache_hit":         true,
+  "scan_duration_ms":  42,
   "findings": [
     {
-      "rule_id":   "CVE-2023-12345",
-      "title":     "Remote code execution in FooLib",
-      "severity":  "CRITICAL",
-      "cvss_score": 9.8,
-      "source":    "osv",
+      "rule_id":     "CVE-2023-12345",
+      "title":       "Remote code execution in FooLib",
+      "severity":    "CRITICAL",
+      "cvss_score":  9.8,
+      "source":      "osv",
       "remediation": "Upgrade to FooLib >= 2.1.0"
     }
-  ]
+  ],
+  "transitive_results": []
 }
 ```
 
@@ -1045,7 +1068,7 @@ pip install pre-commit
 cat >> .pre-commit-config.yaml <<'EOF'
 repos:
   - repo: https://github.com/mkarvan/AgentShield
-    rev: v0.5.0
+    rev: v0.7.0
     hooks:
       - id: agentshield-scan
 EOF
@@ -1093,7 +1116,7 @@ jobs:
           fail-on: HIGH
 ```
 
-**Inputs:** `manifests` (glob pattern), `check-licenses` (bool), `fail-on` (severity threshold), `deep` (bool), `transitive` (bool), `github-token`.
+**Inputs:** `manifests` (glob pattern), `check-licenses` (bool), `fail-on` (severity threshold), `deep` (bool), `transitive` (bool), `github-token`, `version` (AgentShield version to install, default `0.7.0`).
 
 **Outputs:** `blocked`, `warned`, `total`, `report` (markdown text).
 
@@ -1362,7 +1385,7 @@ pip install --force-reinstall agentshield
 ## Contributing
 
 ```bash
-git clone https://github.com/yourusername/agentshield
+git clone https://github.com/mkarvan/AgentShield
 cd agentshield
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,static-analysis]"

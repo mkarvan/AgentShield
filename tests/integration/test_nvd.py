@@ -15,7 +15,7 @@ import os
 import pytest
 
 from agentshield.core.models import Ecosystem, ScanRequest, Severity
-from agentshield.databases.nvd import NVDClient
+from agentshield.databases.nvd import NVD429Error, NVDClient
 
 pytestmark = pytest.mark.integration
 
@@ -32,7 +32,10 @@ def nvd_client() -> NVDClient:
 async def test_nvd_scan_returns_list(nvd_client: NVDClient):
     """Smoke test: scan returns a list without raising."""
     req = ScanRequest(package="requests", version="2.6.0", ecosystem=Ecosystem.PYPI)
-    findings = await nvd_client.scan(req)
+    try:
+        findings = await nvd_client.scan(req)
+    except NVD429Error:
+        pytest.skip("NVD rate-limiting")
     assert isinstance(findings, list)
 
 

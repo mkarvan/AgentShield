@@ -431,7 +431,13 @@ class TestScanNetworkPyPI:
         result = cli("scan", "flask", "--ecosystem", "pypi", config=cfg)
         assert result.returncode in (0, 1)
         combined = result.stdout + result.stderr
-        assert "ALLOW" in combined or "BLOCK" in combined or "LOG_ASYNC" in combined
+        assert (
+            "ALLOW" in combined
+            or "BLOCK" in combined
+            or "LOG_ASYNC" in combined
+            or "NEEDS_CONFIRMATION" in combined
+            or "WARN_CONFIRM" in combined
+        )
 
 
 @pytest.mark.network

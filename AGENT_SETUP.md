@@ -601,7 +601,7 @@ agentshield serve --http --port 9000
 agentshield serve
 
 # Start a guarded shell that intercepts pip/npm/cargo installs
-# Also monitors system package managers (apt-get, brew, yum, etc.) with warnings
+# Also monitors system package managers (apt-get, brew, yum, etc.) with CVE scanning
 agentshield guard
 agentshield guard --shell zsh
 ```

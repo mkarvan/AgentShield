@@ -184,10 +184,18 @@ Core security middleware with CVE scanning (OSV, NVD, GitHub Advisory), typosqua
 - Shell guard wrapper functions added for all supported managers in bash, zsh, and fish init scripts
 - Unit tests in `tests/unit/test_syspkg_detector.py`; e2e tests in `tests/e2e/test_syspkg_e2e.py`
 
-## v0.9.0 (planned)
+## v0.9.0 (done)
 
-### CVE scanning for system packages
+### CVE scanning for system packages (done)
 
-- Query distro security trackers (Debian Security Tracker, Red Hat CVE DB, Ubuntu USN, Homebrew audit) for installed system packages
-- Integrate with `syspkg_detector.py` to provide vulnerability data for detected system package installs
-- Configurable severity threshold for system package CVE warnings
+- `src/agentshield/analyzers/syspkg_cve.py` — `SysPkgCVEScanner` class queries multiple vulnerability sources for system packages
+- **Primary source**: OSV API — maps package managers to OSV ecosystems (Debian, Ubuntu, Alpine, AlmaLinux, Rocky Linux, SUSE)
+- **Supplementary sources**: Ubuntu CVE API, Red Hat Security Data API, Homebrew Formulae API (deprecation/disability checks)
+- Results cached in SQLite (`syspkg_cve_cache` table) with configurable TTL (default 6h)
+- Wired into `guard-scan-cmd` — CVE findings evaluated against configurable severity policy
+- Shell guard wrappers updated with `|| return 1` — system package installs now blocked when critical CVEs found
+- `SysPkgConfig` in `config.py` — `[syspkg]` TOML section with `enabled`, `cve_scan`, and `severity_policy` fields
+- Default severity policy matches existing pattern: critical=BLOCK, high=WARN_CONFIRM, medium=ASYNC_REPORT, low/info=IGNORE
+- Rule-level overrides supported via `[rules."CVE-XXXX-YYYY"]` in config.toml
+- Offline mode and `cve_scan = false` both skip CVE scanning (SP1.1 warnings still emitted)
+- Unit tests in `tests/unit/test_syspkg_cve.py`; e2e tests in `tests/e2e/test_syspkg_cve_e2e.py`

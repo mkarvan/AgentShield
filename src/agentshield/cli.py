@@ -718,11 +718,74 @@ def guard_scan_cmd(
     cfg = Config.load(config)
     shield = AgentShield(config=cfg)
 
-    # ── system package manager warnings (never block) ────────────────────────
+    # ── system package manager detection ───────────────────────────────────
     syspkg_warnings = detect_syspkg_commands(command)
     if syspkg_warnings:
         for w in syspkg_warnings:
             console.print(f"[yellow]AgentShield WARNING [SP1.1]: {w.title}[/yellow]")
+
+        # ── CVE scanning for detected system packages (v0.9.0) ──────────
+        if cfg.syspkg.enabled and cfg.syspkg.cve_scan and not cfg.offline:
+            from agentshield.analyzers.syspkg_cve import SysPkgCVEScanner
+
+            cve_scanner = SysPkgCVEScanner(db_path=cfg.cache.db_path)
+            cve_findings = asyncio.run(cve_scanner.scan_warnings(syspkg_warnings))
+
+            if cve_findings:
+                # Evaluate each finding against syspkg severity policy
+                syspkg_policy = cfg.syspkg.severity_policy
+                from agentshield.core.models import ResponseMode
+
+                _MODE_TO_ACTION = {
+                    ResponseMode.BLOCK: DecisionAction.BLOCK,
+                    ResponseMode.WARN_CONFIRM: DecisionAction.NEEDS_CONFIRMATION,
+                    ResponseMode.IGNORE: DecisionAction.ALLOW,
+                    ResponseMode.ASYNC_REPORT: DecisionAction.LOG_ASYNC,
+                }
+                action_order = [
+                    DecisionAction.ALLOW,
+                    DecisionAction.LOG_ASYNC,
+                    DecisionAction.NEEDS_CONFIRMATION,
+                    DecisionAction.BLOCK,
+                ]
+
+                worst_action = DecisionAction.ALLOW
+                cve_blocked: list[tuple[str, str]] = []
+                cve_warned: list[tuple[str, str]] = []
+
+                for finding in cve_findings:
+                    # Rule-level override first, then syspkg policy
+                    if finding.rule_id in cfg.rules and "mode" in cfg.rules[finding.rule_id]:
+                        mode = ResponseMode(cfg.rules[finding.rule_id]["mode"])
+                    else:
+                        mode = syspkg_policy.for_severity(finding.severity)
+                    action = _MODE_TO_ACTION[mode]
+
+                    if action == DecisionAction.BLOCK:
+                        cve_blocked.append((finding.rule_id, finding.title))
+                    elif action in (
+                        DecisionAction.NEEDS_CONFIRMATION,
+                        DecisionAction.LOG_ASYNC,
+                    ):
+                        cve_warned.append((finding.rule_id, finding.title))
+
+                    if action_order.index(action) > action_order.index(worst_action):
+                        worst_action = action
+
+                if cve_warned:
+                    console.print(
+                        f"[yellow]AgentShield: {len(cve_warned)} CVE(s) flagged for review[/yellow]",
+                    )
+                    for rule_id, title in cve_warned:
+                        console.print(f"  • {rule_id}: {title}")
+
+                if cve_blocked:
+                    console.print(
+                        f"[red]AgentShield BLOCKED {len(cve_blocked)} CVE(s):[/red]",
+                    )
+                    for rule_id, title in cve_blocked:
+                        console.print(f"  • {rule_id}: {title}")
+                    raise typer.Exit(code=1)
 
     manifest_paths, manifest_suspicions = _parse_shell_manifests(command)
     suspicions = _find_shell_suspicions(command) + manifest_suspicions

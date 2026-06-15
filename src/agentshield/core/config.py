@@ -130,6 +130,28 @@ class TrustScoreConfig(BaseModel):
     min_signals: int = 2
 
 
+class SysPkgConfig(BaseModel):
+    """System package CVE scanning configuration (v0.9.0).
+
+    Configure in config.toml under [syspkg]:
+
+        [syspkg]
+        enabled = true
+        cve_scan = true
+
+        [syspkg.severity_policy]
+        critical = "block"
+        high = "warn_confirm"
+        medium = "async_report"
+        low = "ignore"
+        info = "ignore"
+    """
+
+    enabled: bool = True
+    cve_scan: bool = True
+    severity_policy: SeverityPolicy = Field(default_factory=SeverityPolicy)
+
+
 class Config(BaseModel):
     defaults: SeverityPolicy = Field(default_factory=SeverityPolicy)
     ecosystems: dict[str, SeverityPolicy] = Field(default_factory=dict)
@@ -142,6 +164,7 @@ class Config(BaseModel):
     license_policy: LicensePolicy = Field(default_factory=LicensePolicy)
     rate_limits: RateLimitsConfig = Field(default_factory=RateLimitsConfig)
     trust_score: TrustScoreConfig = Field(default_factory=TrustScoreConfig)
+    syspkg: SysPkgConfig = Field(default_factory=SysPkgConfig)
     offline: bool = False
 
     @model_validator(mode="before")

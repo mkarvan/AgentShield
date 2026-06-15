@@ -165,7 +165,7 @@ class TestShimEnforcement:
     def _run(self, fake_env, shim_dir, command: str):
         env = {
             **os.environ,
-            "PATH": f"{shim_dir}:{fake_env['realbin']}:{os.environ.get('PATH','')}",
+            "PATH": f"{shim_dir}:{fake_env['realbin']}:{os.environ.get('PATH', '')}",
             "AGENTSHIELD_BIN": str(fake_env["agentshield"]),
         }
         return subprocess.run(["bash", "-c", command], env=env, capture_output=True, text=True)
@@ -247,8 +247,8 @@ class TestExecveEnforcement:
 
 class TestProxy:
     def test_parse_request_path(self):
-        from agentshield.enforce.proxy import parse_request_path
         from agentshield.core.models import Ecosystem
+        from agentshield.enforce.proxy import parse_request_path
 
         assert parse_request_path("/simple/requests/") == (Ecosystem.PYPI, "requests")
         assert parse_request_path("/pypi/simple/flask/") == (Ecosystem.PYPI, "flask")

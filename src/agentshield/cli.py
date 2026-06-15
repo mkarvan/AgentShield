@@ -806,9 +806,7 @@ def guard_scan_cmd(
     for inst in installs:
         if inst.ecosystem is None:
             for pkg in inst.packages or ["<unspecified>"]:
-                unverifiable.append(
-                    (pkg, f"'{inst.manager}' has no scan backend — cannot verify")
-                )
+                unverifiable.append((pkg, f"'{inst.manager}' has no scan backend — cannot verify"))
             continue
         requests_list.extend(
             ScanRequest(package=pkg, ecosystem=inst.ecosystem, source="guard")
@@ -1240,7 +1238,10 @@ def shim_uninstall(
 @app.command("enforce-build")
 def enforce_build(
     output: Path | None = typer.Option(
-        None, "--output", "-o", help="Output .so path (default: ~/.agentshield/libagentshield_exec.so)"
+        None,
+        "--output",
+        "-o",
+        help="Output .so path (default: ~/.agentshield/libagentshield_exec.so)",
     ),
 ) -> None:
     """Compile the Linux execve interceptor (LD_PRELOAD library)."""

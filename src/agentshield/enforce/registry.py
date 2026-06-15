@@ -118,9 +118,7 @@ VALUE_FLAGS: frozenset[str] = frozenset(
 # Matches a valid package spec and captures the bare name in group 1.
 # Handles: requests, requests==2.28.0, requests[security], requests[security]>=2,
 # @scope/pkg (npm), serde@1.0 (cargo).
-_PKG_SPEC_RE = re.compile(
-    r"^(@?[A-Za-z0-9][A-Za-z0-9._/-]*)(?:\[[^\]]*\])?(?:[><=!~^@][^\s]*)?$"
-)
+_PKG_SPEC_RE = re.compile(r"^(@?[A-Za-z0-9][A-Za-z0-9._/-]*)(?:\[[^\]]*\])?(?:[><=!~^@][^\s]*)?$")
 
 # Patterns in install args that cannot be statically resolved.
 _EXPANSION_RE = re.compile(r"\$(?:\{[^}]*\}|\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)")
@@ -232,8 +230,13 @@ _GO_BIN = r"go(?![\w-])"
 
 MANAGERS: tuple[ManagerSpec, ...] = (
     # ── PyPI family ───────────────────────────────────────────────────────────
-    ManagerSpec("python-m-pip", ("python", "python3"), (("-m", "pip", "install"),),
-                Ecosystem.PYPI, _PYTHON_BIN),
+    ManagerSpec(
+        "python-m-pip",
+        ("python", "python3"),
+        (("-m", "pip", "install"),),
+        Ecosystem.PYPI,
+        _PYTHON_BIN,
+    ),
     ManagerSpec("uv-pip", ("uv",), (("pip", "install"),), Ecosystem.PYPI, _UV_BIN),
     ManagerSpec("uv-add", ("uv",), (("add",),), Ecosystem.PYPI, _UV_BIN),
     ManagerSpec("pipx", ("pipx",), (("install",),), Ecosystem.PYPI, _PIPX_BIN),
@@ -314,7 +317,9 @@ def parse_command(command: str) -> list[ParsedInstall]:
     results: list[ParsedInstall] = []
     for _start, _end, spec, args in sorted(accepted, key=lambda t: t[0]):
         results.append(
-            ParsedInstall(manager=spec.name, ecosystem=spec.ecosystem, packages=_tokenize(args.split()))
+            ParsedInstall(
+                manager=spec.name, ecosystem=spec.ecosystem, packages=_tokenize(args.split())
+            )
         )
     return results
 
@@ -411,9 +416,7 @@ def parse_manifests(command: str) -> tuple[list[str], list[str]]:
                         else:
                             value = ""
                         if value and "://" in value:
-                            suspicions.append(
-                                f"unanalyzable remote requirements file '{value}'"
-                            )
+                            suspicions.append(f"unanalyzable remote requirements file '{value}'")
                         elif value:
                             paths.append(value)
                     i += 1

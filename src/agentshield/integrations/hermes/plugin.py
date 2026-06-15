@@ -209,9 +209,7 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
                 file_result = await self.shield.ascan_file(manifest_path)
             except Exception as exc:  # noqa: BLE001 — fail closed
                 logger.warning("AgentShield scan error for manifest %s: %s", manifest, exc)
-                blocked_messages.append(
-                    f"{manifest}: scan failed ({exc}); blocking to fail closed"
-                )
+                blocked_messages.append(f"{manifest}: scan failed ({exc}); blocking to fail closed")
                 continue
             action = file_result.aggregate_decision.action
             if action == DecisionAction.BLOCK:

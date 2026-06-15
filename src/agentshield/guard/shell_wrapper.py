@@ -83,7 +83,7 @@ def _posix_lang_fn(binary: str, triggers: list[str]) -> str:
         body = f"    if [[ {cond} ]]; then\n        {call}\n    fi\n"
     else:
         body = f"    {call}\n"
-    return f"function {binary}() {{\n{body}    command {binary} \"$@\"\n}}\n"
+    return f'function {binary}() {{\n{body}    command {binary} "$@"\n}}\n'
 
 
 def _posix_sys_fn(binary: str, triggers: list[str] | None) -> str:
@@ -93,7 +93,7 @@ def _posix_sys_fn(binary: str, triggers: list[str] | None) -> str:
         body = f"    if [[ {cond} ]]; then\n        {call}\n    fi\n"
     else:
         body = f"    {call}\n"
-    return f"function {binary}() {{\n{body}    command {binary} \"$@\"\n}}\n"
+    return f'function {binary}() {{\n{body}    command {binary} "$@"\n}}\n'
 
 
 def _build_posix(prompt_line: str) -> str:
@@ -108,8 +108,8 @@ def _build_posix(prompt_line: str) -> str:
         "\n# System package managers — CVE scan may block if critical vulns found.\n"
         "# Note: -- stops typer from interpreting package-manager flags (e.g. pacman -S)\n"
     )
-    for binary, triggers in _SYSPKG_GATES.items():
-        parts.append(_posix_sys_fn(binary, triggers))
+    for sys_binary, sys_triggers in _SYSPKG_GATES.items():
+        parts.append(_posix_sys_fn(sys_binary, sys_triggers))
     parts.append(f"\n{prompt_line}\n")
     parts.append(f'echo "{_GUARD_MSG_LANG}"\n')
     parts.append(f'echo "{_GUARD_MSG_SYS}"\n')
@@ -137,8 +137,8 @@ def _build_fish() -> str:
         "\n# System package managers — CVE scan may block if critical vulns found.\n"
         "# Note: -- stops fish/typer from interpreting package-manager flags.\n"
     )
-    for binary, triggers in _SYSPKG_GATES.items():
-        parts.append(_fish_fn(binary, triggers, sep="-- "))
+    for sys_binary, sys_triggers in _SYSPKG_GATES.items():
+        parts.append(_fish_fn(sys_binary, sys_triggers, sep="-- "))
     parts.append(f'\necho "{_GUARD_MSG_LANG}"\n')
     parts.append(f'echo "{_GUARD_MSG_SYS}"\n')
     return "".join(parts)

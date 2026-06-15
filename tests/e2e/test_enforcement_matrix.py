@@ -298,3 +298,131 @@ class TestProxy:
         monkeypatch.setattr(screen.shield, "ascan", _boom)
         ok, reason = screen.decide("whatever", Ecosystem.PYPI)
         assert ok is False and "fail closed" in reason
+
+    def test_proxy_env_injection(self):
+        from agentshield.enforce.proxy import proxy_env, proxy_export_lines
+
+        env = proxy_env("127.0.0.1", 8799)
+        assert env["PIP_INDEX_URL"] == "http://127.0.0.1:8799/simple/"
+        assert env["UV_INDEX_URL"] == "http://127.0.0.1:8799/simple/"
+        assert env["npm_config_registry"] == "http://127.0.0.1:8799/npm/"
+        lines = proxy_export_lines("h", 1234)
+        assert any(ln == 'export PIP_INDEX_URL="http://h:1234/simple/"' for ln in lines)
+
+    def test_decide_blocks_on_malicious_transitive_dep(self, monkeypatch):
+        from agentshield.core.models import (
+            Decision,
+            DecisionAction,
+            Ecosystem,
+            ScanRequest,
+            ScanResult,
+            Severity,
+        )
+        from agentshield.enforce.proxy import ProxyScreen
+
+        screen = ProxyScreen(transitive=True)
+
+        async def _clean_pkg_dirty_dep(req):
+            dep = ScanResult(
+                request=ScanRequest(package="evil-dep", ecosystem=Ecosystem.PYPI),
+                findings=[],
+                max_severity=Severity.CRITICAL,
+                decision=Decision(action=DecisionAction.BLOCK, reason="malicious dep"),
+            )
+            return ScanResult(
+                request=req,
+                findings=[],
+                max_severity=Severity.NONE,
+                decision=Decision(action=DecisionAction.ALLOW, reason="pkg clean"),
+                transitive_results=[dep],
+            )
+
+        monkeypatch.setattr(screen.shield, "ascan", _clean_pkg_dirty_dep)
+        ok, reason = screen.decide("toppkg", Ecosystem.PYPI)
+        assert ok is False
+        assert "transitive dependency" in reason and "evil-dep" in reason
+
+
+# ── conda channel handling ────────────────────────────────────────────────────
+
+
+class TestCondaChannels:
+    def test_default_channel_is_pypi_best_effort(self):
+        installs = registry.parse_command("conda install numpy")
+        assert len(installs) == 1
+        assert installs[0].ecosystem is not None and installs[0].ecosystem.value == "pypi"
+        assert installs[0].packages == ["numpy"]
+
+    def test_trusted_channel_flag_is_pypi(self):
+        installs = registry.parse_command("conda install -c conda-forge numpy")
+        assert [i.ecosystem.value if i.ecosystem else None for i in installs] == ["pypi"]
+        assert installs[0].packages == ["numpy"]
+
+    def test_untrusted_channel_flag_fails_closed(self):
+        installs = registry.parse_command("conda install --channel sketchy evilpkg")
+        assert len(installs) == 1
+        inst = installs[0]
+        assert inst.ecosystem is None
+        assert inst.packages == ["evilpkg"]
+        assert inst.unverifiable_reason and "sketchy" in inst.unverifiable_reason
+
+    def test_untrusted_channel_spec_syntax_fails_closed(self):
+        installs = registry.parse_command("conda install sketchy::trojan")
+        assert installs[0].ecosystem is None
+        assert installs[0].packages == ["trojan"]
+
+    def test_trusted_channel_spec_syntax_is_pypi(self):
+        installs = registry.parse_command("conda install conda-forge::numpy")
+        assert installs[0].ecosystem is not None
+        assert installs[0].packages == ["numpy"]
+
+    def test_version_spec_stripped(self):
+        installs = registry.parse_command("conda install numpy=1.24 scipy")
+        assert installs[0].packages == ["numpy", "scipy"]
+
+    def test_conda_parser_unit(self):
+        from agentshield.enforce import conda
+
+        pkgs = conda.parse_conda_install(["-c", "conda-forge", "numpy", "badchan::x"])
+        by_name = {p.name: p for p in pkgs}
+        assert by_name["numpy"].trusted is True
+        assert by_name["x"].trusted is False and by_name["x"].channel == "badchan"
+
+
+# ── execve macOS source generation ────────────────────────────────────────────
+
+
+class TestExecveMacOS:
+    def test_macos_source_uses_interpose_not_dlsym(self):
+        from agentshield.enforce import execve
+
+        src = execve.c_source("Darwin")
+        assert "__DATA,__interpose" in src
+        assert "dlsym" not in src
+        # managed binaries embedded
+        assert '"pip"' in src and '"conda"' in src
+
+    def test_linux_source_uses_dlsym_not_interpose(self):
+        from agentshield.enforce import execve
+
+        src = execve.c_source("Linux")
+        assert "dlsym" in src
+        assert "__interpose" not in src
+
+    def test_library_name_and_env_var_per_platform(self):
+        from pathlib import Path
+
+        from agentshield.enforce import execve
+
+        assert execve.library_name("Darwin") == "libagentshield_exec.dylib"
+        assert execve.library_name("Linux") == "libagentshield_exec.so"
+        assert execve.preload_env_var(Path("/x/lib.dylib")) == "DYLD_INSERT_LIBRARIES"
+        assert execve.preload_env_var(Path("/x/lib.so")) == "LD_PRELOAD"
+
+    def test_preload_line_macos(self):
+        from pathlib import Path
+
+        from agentshield.enforce import execve
+
+        line = execve.preload_env_line(Path("/opt/libagentshield_exec.dylib"))
+        assert line.startswith("export DYLD_INSERT_LIBRARIES=")

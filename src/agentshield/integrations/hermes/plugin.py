@@ -174,11 +174,12 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
             # Recognised but unverifiable manager (e.g. gem, go) — no scan backend,
             # so we cannot clear it. Fail closed.
             if inst.ecosystem is None:
+                reason = (
+                    inst.unverifiable_reason
+                    or f"'{inst.manager}' has no scan backend — cannot verify"
+                )
                 for pkg in inst.packages or ["<unspecified>"]:
-                    blocked_messages.append(
-                        f"{pkg}: '{inst.manager}' has no scan backend — cannot verify "
-                        f"(blocking to fail closed)"
-                    )
+                    blocked_messages.append(f"{pkg}: {reason} (blocking to fail closed)")
                 continue
 
             for pkg_name in inst.packages:

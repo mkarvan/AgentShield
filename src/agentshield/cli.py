@@ -805,8 +805,11 @@ def guard_scan_cmd(
     requests_list: list[ScanRequest] = []
     for inst in installs:
         if inst.ecosystem is None:
+            reason = (
+                inst.unverifiable_reason or f"'{inst.manager}' has no scan backend — cannot verify"
+            )
             for pkg in inst.packages or ["<unspecified>"]:
-                unverifiable.append((pkg, f"'{inst.manager}' has no scan backend — cannot verify"))
+                unverifiable.append((pkg, reason))
             continue
         requests_list.extend(
             ScanRequest(package=pkg, ecosystem=inst.ecosystem, source="guard")
@@ -1262,19 +1265,60 @@ def proxy(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
     port: int = typer.Option(8799, "--port", "-p", help="Bind port"),
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+    transitive: bool = typer.Option(
+        True, "--transitive/--no-transitive", help="Also scan resolved transitive deps"
+    ),
+    print_env: bool = typer.Option(
+        False,
+        "--print-env",
+        help="Print the export lines to route managers through the proxy and exit",
+    ),
 ) -> None:
-    """Run the scanning index proxy (primary gate).
+    """Run the scanning index proxy — the primary enforcement gate.
 
-    Point pip/npm at it, e.g.::
+    Route pip/uv and npm/yarn/pnpm/bun through it by exporting the env it prints
+    on startup (or `agentshield proxy --print-env`), e.g.::
 
-        PIP_INDEX_URL=http://127.0.0.1:8799/simple/ pip install <pkg>
+        export PIP_INDEX_URL=http://127.0.0.1:8799/simple/
+        export npm_config_registry=http://127.0.0.1:8799/npm/
     """
     from agentshield.core.config import Config
     from agentshield.enforce import proxy as proxy_mod
 
+    if print_env:
+        for line in proxy_mod.proxy_export_lines(host, port):
+            print(line)
+        return
+
     cfg = Config.load(config)
     console.print(f"[cyan]AgentShield index proxy on http://{host}:{port}[/cyan]  (Ctrl-C to stop)")
-    proxy_mod.serve(host=host, port=port, config=cfg)
+    console.print("[dim]Route managers through the proxy in another shell:[/dim]")
+    for line in proxy_mod.proxy_export_lines(host, port):
+        console.print(f"  [green]{line}[/green]")
+    proxy_mod.serve(host=host, port=port, config=cfg, transitive=transitive)
+
+
+@app.command("enforce-env")
+def enforce_env(
+    host: str = typer.Option("127.0.0.1", "--host", help="Proxy bind address"),
+    port: int = typer.Option(8799, "--port", "-p", help="Proxy bind port"),
+    shim_dir: Path | None = typer.Option(None, "--shim-dir", help="Shim directory"),
+) -> None:
+    """Print the full defense-in-depth setup: proxy env (primary) + shim PATH +
+    execve preload (secondary/baseline)."""
+    from agentshield.enforce import execve, shim
+    from agentshield.enforce import proxy as proxy_mod
+
+    print("# 1. Primary gate — index proxy (run `agentshield proxy` first):")
+    for line in proxy_mod.proxy_export_lines(host, port):
+        print(line)
+    print("\n# 2. Baseline — PATH shim (run `agentshield shim install` first):")
+    target = shim_dir if shim_dir else shim.default_shim_dir()
+    print(shim.path_export_line(target))
+    print("\n# 3. Absolute-path coverage — execve interceptor (run `agentshield enforce-build`):")
+    so_name = "libagentshield_exec.dylib" if execve.is_macos() else "libagentshield_exec.so"
+    so_path = Path.home() / ".agentshield" / so_name
+    print(execve.preload_env_line(so_path))
 
 
 if __name__ == "__main__":

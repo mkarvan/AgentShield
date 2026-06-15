@@ -1,18 +1,23 @@
-"""Scanning index proxy — the manager-agnostic primary gate.
+"""Scanning index proxy — the manager-agnostic **primary** enforcement gate.
 
-Package managers can be pointed at a proxy instead of the public index
-(``PIP_INDEX_URL``, ``npm_config_registry``, …).  Every package the resolver
-asks for is scanned *before* it is served: a clean package is redirected to the
-real upstream index; a blocked package returns HTTP 403 so the install fails.
+Package managers are pointed at this proxy instead of the public index
+(``PIP_INDEX_URL``/``UV_INDEX_URL`` for pip/uv, ``npm_config_registry`` for
+npm/yarn/pnpm/bun).  Every package the resolver asks for is scanned *before* it
+is served: a clean package is redirected to the real upstream index; a blocked
+package returns HTTP 403 so the install fails.  This is the primary gate because
+it sees the *actually resolved* package names — including transitive
+dependencies, which are scanned too — regardless of how the install was invoked,
+and cannot be fooled by argv tricks.  The PATH shim and ``execve`` interceptor
+are the secondary/baseline layers that cover what the proxy cannot.
 
-Advantages over command parsing: it sees the *actually resolved* package names
-(and, via repeated requests, transitive dependencies) regardless of how the
-install was invoked, and cannot be fooled by argv tricks.
+Use :func:`proxy_env` / :func:`proxy_export_lines` to obtain the environment
+that routes managers through the proxy.
 
 Caveats: it does not see installs from local files, direct wheel/tarball URLs,
-or VCS (``git+…``) references that bypass the index, and per-manager index
-configuration must be in place (and is itself unset-able). It therefore
-complements — not replaces — the shim and execve layers.
+or VCS (``git+…``) references that bypass the index; cargo (source-replacement)
+and go (``GOPROXY`` speaks a different protocol) are **not** routed through the
+proxy and are covered by the shim/execve layers instead.  Per-manager index
+configuration must be in place (and is itself unset-able).
 
 This module is intentionally dependency-light (stdlib ``http.server``); the
 scan verdict is delegated to :class:`agentshield.core.scanner.AgentShield`.
@@ -36,6 +41,32 @@ _UPSTREAM: dict[Ecosystem, str] = {
     Ecosystem.PYPI: "https://pypi.org/simple",
     Ecosystem.NPM: "https://registry.npmjs.org",
 }
+
+
+# ── env injection (route managers through the proxy) ──────────────────────────
+
+
+def proxy_url(host: str, port: int) -> str:
+    return f"http://{host}:{port}"
+
+
+def proxy_env(host: str = "127.0.0.1", port: int = 8799) -> dict[str, str]:
+    """Environment variables that route supported managers through the proxy.
+
+    Covers pip/uv (PyPI simple index) and npm/yarn/pnpm/bun (npm registry).
+    cargo and go are intentionally absent — see the module docstring.
+    """
+    base = proxy_url(host, port)
+    return {
+        "PIP_INDEX_URL": f"{base}/simple/",
+        "UV_INDEX_URL": f"{base}/simple/",
+        "npm_config_registry": f"{base}/npm/",
+    }
+
+
+def proxy_export_lines(host: str = "127.0.0.1", port: int = 8799) -> list[str]:
+    """Shell ``export`` lines for :func:`proxy_env`."""
+    return [f'export {k}="{v}"' for k, v in proxy_env(host, port).items()]
 
 
 def parse_request_path(path: str) -> tuple[Ecosystem, str] | None:
@@ -66,14 +97,33 @@ def parse_request_path(path: str) -> tuple[Ecosystem, str] | None:
 
 
 class ProxyScreen:
-    """Wraps the scanner with a single ``decide`` entrypoint for the proxy."""
+    """Wraps the scanner with a single ``decide`` entrypoint for the proxy.
 
-    def __init__(self, config: Config | None = None) -> None:
+    ``transitive`` (default on) makes each decision also resolve and scan the
+    package's dependency tree, so a clean package depending on a malicious one is
+    still blocked.
+    """
+
+    def __init__(
+        self,
+        config: Config | None = None,
+        *,
+        transitive: bool = True,
+        transitive_depth: int = 3,
+    ) -> None:
         self.shield = AgentShield(config=config)
+        self.transitive = transitive
+        self.transitive_depth = transitive_depth
 
     def decide(self, package: str, ecosystem: Ecosystem) -> tuple[bool, str]:
-        """Return ``(allowed, reason)`` for *package*. Fails closed on error."""
-        request = ScanRequest(package=package, ecosystem=ecosystem, source="proxy")
+        """Return ``(allowed, reason)`` for *package* and its deps. Fails closed."""
+        request = ScanRequest(
+            package=package,
+            ecosystem=ecosystem,
+            source="proxy",
+            transitive=self.transitive,
+            transitive_depth=self.transitive_depth,
+        )
         try:
             result = asyncio.run(self.shield.ascan(request))
         except Exception as exc:  # noqa: BLE001 — fail closed
@@ -81,6 +131,13 @@ class ProxyScreen:
             return False, f"scan failed ({exc}); blocking to fail closed"
         if result.decision.action == DecisionAction.BLOCK:
             return False, result.decision.reason
+        # Block if any resolved transitive dependency is itself blocked.
+        for dep in result.transitive_results:
+            if dep.decision.action == DecisionAction.BLOCK:
+                return (
+                    False,
+                    f"transitive dependency '{dep.request.package}': {dep.decision.reason}",
+                )
         return True, result.decision.reason
 
 
@@ -112,9 +169,15 @@ def _make_handler(screen: ProxyScreen) -> type[BaseHTTPRequestHandler]:
     return _Handler
 
 
-def serve(host: str = "127.0.0.1", port: int = 8799, config: Config | None = None) -> None:
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8799,
+    config: Config | None = None,
+    *,
+    transitive: bool = True,
+) -> None:
     """Run the scanning proxy until interrupted."""
-    screen = ProxyScreen(config=config)
+    screen = ProxyScreen(config=config, transitive=transitive)
     httpd = ThreadingHTTPServer((host, port), _make_handler(screen))
     logger.info("AgentShield index proxy listening on http://%s:%d", host, port)
     try:

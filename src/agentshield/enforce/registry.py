@@ -198,16 +198,22 @@ class ManagerSpec:
             )
         return pats
 
-    def argv_packages(self, args: list[str]) -> list[str] | None:
+    def match_prefix(self, args: list[str]) -> list[str] | None:
         """If *args* (the tokens after the binary) start with an install prefix,
-        return the package names; otherwise ``None`` (not an install)."""
+        return the remaining tokens; otherwise ``None`` (not an install)."""
         for prefix in self.prefixes:
             n = len(prefix)
             if len(args) >= n and tuple(a.lower() for a in args[:n]) == tuple(
                 p.lower() for p in prefix
             ):
-                return _tokenize(args[n:])
+                return args[n:]
         return None
+
+    def argv_packages(self, args: list[str]) -> list[str] | None:
+        """If *args* (the tokens after the binary) start with an install prefix,
+        return the package names; otherwise ``None`` (not an install)."""
+        tail = self.match_prefix(args)
+        return None if tail is None else _tokenize(tail)
 
 
 # Binary-name regexes.  No left boundary is required so path-qualified
@@ -280,10 +286,52 @@ class ParsedInstall:
     manager: str
     ecosystem: Ecosystem | None
     packages: list[str] = field(default_factory=list)
+    # When ``ecosystem is None`` (unverifiable), an optional human-readable reason
+    # (e.g. an untrusted conda channel) used in fail-closed block messages.
+    unverifiable_reason: str | None = None
 
     @property
     def verifiable(self) -> bool:
         return self.ecosystem is not None
+
+
+# ── conda channel-aware expansion ─────────────────────────────────────────────
+
+
+def _conda_parsed(arg_tokens: list[str]) -> list[ParsedInstall]:
+    """Classify a ``conda install`` argument vector by channel trust.
+
+    Trusted-channel packages are scanned best-effort as PyPI; untrusted-channel
+    packages become an unverifiable result (fail-closed for callers).
+    """
+    from agentshield.enforce import conda  # local import avoids package-init cycle
+
+    pkgs = conda.parse_conda_install(arg_tokens)
+    trusted = [p.name for p in pkgs if p.trusted]
+    untrusted = [p for p in pkgs if not p.trusted]
+
+    out: list[ParsedInstall] = []
+    if trusted:
+        out.append(ParsedInstall(manager="conda", ecosystem=Ecosystem.PYPI, packages=trusted))
+    if untrusted:
+        channels = sorted({p.channel for p in untrusted if p.channel})
+        if channels:
+            reason = (
+                "conda channel(s) "
+                + ", ".join(f"'{c}'" for c in channels)
+                + (" not in trusted set — cannot verify")
+            )
+        else:
+            reason = "untrusted conda channel — cannot verify"
+        out.append(
+            ParsedInstall(
+                manager="conda",
+                ecosystem=None,
+                packages=[p.name for p in untrusted],
+                unverifiable_reason=reason,
+            )
+        )
+    return out
 
 
 # ── free-form command parsing ─────────────────────────────────────────────────
@@ -316,11 +364,14 @@ def parse_command(command: str) -> list[ParsedInstall]:
 
     results: list[ParsedInstall] = []
     for _start, _end, spec, args in sorted(accepted, key=lambda t: t[0]):
-        results.append(
-            ParsedInstall(
-                manager=spec.name, ecosystem=spec.ecosystem, packages=_tokenize(args.split())
+        if spec.name == "conda":
+            results.extend(_conda_parsed(args.split()))
+        else:
+            results.append(
+                ParsedInstall(
+                    manager=spec.name, ecosystem=spec.ecosystem, packages=_tokenize(args.split())
+                )
             )
-        )
     return results
 
 
@@ -353,9 +404,24 @@ def parse_argv(argv: list[str]) -> ParsedInstall | None:
     for spec in _PARSE_ORDER:
         if not any(re.fullmatch(b, binary, re.IGNORECASE) for b in _bin_basenames(spec)):
             continue
-        pkgs = spec.argv_packages(args)
-        if pkgs is not None:
-            return ParsedInstall(manager=spec.name, ecosystem=spec.ecosystem, packages=pkgs)
+        tail = spec.match_prefix(args)
+        if tail is None:
+            continue
+        if spec.name == "conda":
+            # Summarise a possibly mixed-trust conda install as a single result:
+            # verifiable only if every requested package is from a trusted channel.
+            parsed = _conda_parsed(tail)
+            names = [p for inst in parsed for p in inst.packages]
+            untrusted = [inst for inst in parsed if inst.ecosystem is None]
+            if untrusted:
+                return ParsedInstall(
+                    manager="conda",
+                    ecosystem=None,
+                    packages=names,
+                    unverifiable_reason=untrusted[0].unverifiable_reason,
+                )
+            return ParsedInstall(manager="conda", ecosystem=Ecosystem.PYPI, packages=names)
+        return ParsedInstall(manager=spec.name, ecosystem=spec.ecosystem, packages=_tokenize(tail))
     return None
 
 

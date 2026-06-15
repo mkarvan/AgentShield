@@ -1,28 +1,38 @@
-"""execve interception — closes the absolute-path / PATH-reset gap (Linux).
+"""exec interception — closes the absolute-path / PATH-reset gap (Linux + macOS).
 
 The PATH shim (:mod:`agentshield.enforce.shim`) only catches invocations that
 resolve through ``PATH``.  An agent calling ``/usr/bin/pip install …`` directly,
-or one that resets ``PATH``, slips past it.  This module generates an
-``LD_PRELOAD`` library that hooks the ``exec`` family: when a *managed* binary
-is about to be executed, it first runs ``agentshield guard-scan-cmd <argv>``
-(which fails closed); a non-zero exit aborts the exec with ``EACCES``.
+or one that resets ``PATH``, slips past it.  This module generates a small
+injected library that hooks the ``exec`` family: when a *managed* binary is about
+to be executed, it first runs ``agentshield guard-scan-cmd <argv>`` (which fails
+closed); a non-zero exit aborts the exec with ``EACCES``.
+
+Platforms:
+* **Linux** — an ``LD_PRELOAD`` ``.so`` that overrides ``execve``/``execvp``/
+  ``execv`` and chains to the real symbols via ``dlsym(RTLD_NEXT, …)``.
+* **macOS** — a ``DYLD_INSERT_LIBRARIES`` ``.dylib`` using dyld *interposing*
+  (``__DATA,__interpose``).  Calls made from the interposing image itself are
+  not re-interposed, so each replacement chains to the real ``exec`` by name.
 
 Scope / caveats:
-* Linux + a C compiler (``cc``) are required; ``build`` raises otherwise.
-* ``LD_PRELOAD`` only affects dynamically linked executables that honour it;
-  static binaries and setuid programs are not covered.  For those, a
-  ``ptrace``/``seccomp`` supervisor would be needed (future work).
-* In-process installs (e.g. ``pip`` used as a Python API) are not exec events
-  and cannot be seen here — the index proxy (:mod:`agentshield.enforce.proxy`)
-  covers that vector.
+* A C compiler (``cc``) is required; ``build`` raises otherwise.
+* Linux ``LD_PRELOAD`` covers dynamically linked executables; static/setuid
+  binaries are not covered.  On macOS, **SIP** strips ``DYLD_INSERT_LIBRARIES``
+  for system binaries (``/usr/bin``, ``/bin``, …), so this covers user/Homebrew/
+  pyenv-installed managers (``/usr/local``, ``/opt/homebrew``, ``~/.pyenv``) —
+  which is where agent installs almost always run — but not Apple-shipped ones.
+  A kernel-level EndpointSecurity agent would be required to cover SIP-protected
+  binaries; that needs a signed, entitled, root-installed system extension and is
+  out of scope for a pip-installable tool.
+* In-process installs (``pip`` used as a Python API) are not exec events; the
+  index proxy (:mod:`agentshield.enforce.proxy`) covers that vector.
 
-The verdict logic is **not** reimplemented here; the preload shells out to
-``agentshield guard-scan-cmd`` so coverage and policy stay single-sourced.
+The verdict logic is **not** reimplemented here; the injected library shells out
+to ``agentshield guard-scan-cmd`` so coverage and policy stay single-sourced.
 """
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
@@ -31,67 +41,96 @@ from pathlib import Path
 
 from agentshield.enforce.registry import shadow_binaries
 
-# Basenames the preload should gate on. Anything else is exec'd untouched.
+# Basenames the interceptor should gate on. Anything else is exec'd untouched.
 MANAGED_BINARIES: tuple[str, ...] = shadow_binaries()
+
+
+def is_macos(target: str | None = None) -> bool:
+    return (target or platform.system()) == "Darwin"
+
+
+def is_linux(target: str | None = None) -> bool:
+    return (target or platform.system()) == "Linux"
 
 
 def is_managed(argv0: str) -> bool:
     """True if *argv0* (path or bare name) is a managed package-manager binary."""
+    import os
+
     return os.path.basename(argv0) in MANAGED_BINARIES
 
 
-def c_source() -> str:
-    """Return the C source for the LD_PRELOAD interceptor (binary list embedded)."""
+def c_source(target: str | None = None) -> str:
+    """Return the C source for the interceptor for *target* (default: host OS)."""
     entries = ",\n    ".join(f'"{b}"' for b in MANAGED_BINARIES)
-    return _C_TEMPLATE.replace("/*__MANAGED__*/", entries)
+    common = _C_COMMON.replace("/*__MANAGED__*/", entries)
+    hooks = _C_MAC_HOOKS if is_macos(target) else _C_LINUX_HOOKS
+    return common + hooks
+
+
+def library_name(target: str | None = None) -> str:
+    return "libagentshield_exec.dylib" if is_macos(target) else "libagentshield_exec.so"
+
+
+def default_library_path(target: str | None = None) -> Path:
+    return Path.home() / ".agentshield" / library_name(target)
 
 
 def build(dest: Path | None = None, *, agentshield_bin: str = "agentshield") -> Path:
-    """Compile the interceptor to a shared object and return its path.
+    """Compile the interceptor for the **host** platform and return its path.
 
-    Raises ``RuntimeError`` on non-Linux platforms or when no C compiler is
+    Raises ``RuntimeError`` on unsupported platforms or when no C compiler is
     available.
     """
-    if platform.system() != "Linux":
+    system = platform.system()
+    if system not in ("Linux", "Darwin"):
         raise RuntimeError(
-            "execve interception via LD_PRELOAD is Linux-only; "
-            f"current platform is {platform.system()}. Use the PATH shim instead."
+            f"exec interception is supported on Linux and macOS only; host is {system}. "
+            "Use the PATH shim instead."
         )
     cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if not cc:
         raise RuntimeError("no C compiler (cc/gcc/clang) found on PATH; cannot build interceptor")
 
-    out = Path(dest) if dest else (Path.home() / ".agentshield" / "libagentshield_exec.so")
+    out = Path(dest) if dest else default_library_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     src = out.with_suffix(".c")
     src.write_text(c_source())
-    cmd = [cc, "-shared", "-fPIC", "-O2", "-o", str(out), str(src), "-ldl"]
+    if is_macos():
+        cmd = [cc, "-dynamiclib", "-fPIC", "-O2", "-o", str(out), str(src)]
+    else:
+        cmd = [cc, "-shared", "-fPIC", "-O2", "-o", str(out), str(src), "-ldl"]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"compilation failed:\n{proc.stderr}")
     return out
 
 
+def preload_env_var(so_path: Path | None = None, *, target: str | None = None) -> str:
+    """Name of the dynamic-linker injection env var for the platform/library."""
+    macos = so_path.suffix == ".dylib" if so_path is not None else is_macos(target)
+    return "DYLD_INSERT_LIBRARIES" if macos else "LD_PRELOAD"
+
+
 def preload_env_line(so_path: Path) -> str:
     """Shell line that activates the interceptor for the current session."""
-    return f'export LD_PRELOAD="{so_path}:${{LD_PRELOAD}}"'
+    var = preload_env_var(so_path)
+    return f'export {var}="{so_path}:${{{var}}}"'
 
 
-# The preload intercepts execve/execv/execvp. For a managed binary it spawns
-# `agentshield guard-scan-cmd <basename> <args...>`; a non-zero exit blocks
-# (sets errno=EACCES and returns -1 from exec). The real exec symbol is resolved
-# via dlsym(RTLD_NEXT, ...).
-_C_TEMPLATE = r"""
-/* AgentShield execve interceptor — generated; do not edit. */
+# ── C sources ─────────────────────────────────────────────────────────────────
+
+# Common: managed-binary table, basename check, and the scan-subprocess helper.
+# Portable across Linux and macOS (fork/execvp/waitpid/basename are POSIX).
+_C_COMMON = r"""
+/* AgentShield exec interceptor — generated; do not edit. */
 #define _GNU_SOURCE
-#include <dlfcn.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <libgen.h>
-#include <stdarg.h>
 
 static const char *AS_MANAGED[] = {
     /*__MANAGED__*/
@@ -110,7 +149,7 @@ static int as_is_managed(const char *path) {
     return 0;
 }
 
-/* Run `agentshield guard-scan-cmd <base> <args...>`; return 0 to allow. */
+/* Run `agentshield guard-scan-cmd <base> <args...>`; return 1 to allow, 0 block. */
 static int as_scan_ok(const char *path, char *const argv[]) {
     if (getenv("AGENTSHIELD_EXEC_DISABLE")) return 1;
     char buf[4096];
@@ -153,6 +192,11 @@ static int as_scan_ok(const char *path, char *const argv[]) {
     }
     return 1;
 }
+"""
+
+# Linux: override the exec symbols and chain to the real ones via dlsym.
+_C_LINUX_HOOKS = r"""
+#include <dlfcn.h>
 
 typedef int (*as_execve_t)(const char *, char *const[], char *const[]);
 typedef int (*as_execvp_t)(const char *, char *const[]);
@@ -178,6 +222,31 @@ int execv(const char *path, char *const argv[]) {
     if (as_is_managed(path) && !as_scan_ok(path, argv)) { errno = EACCES; return -1; }
     return real(path, argv);
 }
+"""
+
+# macOS: dyld interposing. Calls from this image are not re-interposed, so each
+# replacement chains to the real exec by name.
+_C_MAC_HOOKS = r"""
+static int as_execve(const char *path, char *const argv[], char *const envp[]) {
+    if (as_is_managed(path) && !as_scan_ok(path, argv)) { errno = EACCES; return -1; }
+    return execve(path, argv, envp);
+}
+static int as_execvp(const char *file, char *const argv[]) {
+    if (as_is_managed(file) && !as_scan_ok(file, argv)) { errno = EACCES; return -1; }
+    return execvp(file, argv);
+}
+static int as_execv(const char *path, char *const argv[]) {
+    if (as_is_managed(path) && !as_scan_ok(path, argv)) { errno = EACCES; return -1; }
+    return execv(path, argv);
+}
+
+typedef struct { const void *replacement; const void *replacee; } as_interpose_t;
+__attribute__((used)) static const as_interpose_t _as_interposers[]
+    __attribute__((section("__DATA,__interpose"))) = {
+    { (const void *)as_execve, (const void *)execve },
+    { (const void *)as_execvp, (const void *)execvp },
+    { (const void *)as_execv,  (const void *)execv  },
+};
 """
 
 

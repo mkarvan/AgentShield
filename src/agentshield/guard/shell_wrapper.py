@@ -1,15 +1,21 @@
 """AgentShield Guard — interactive shell wrapper.
 
-Wraps the user's shell session and intercepts ``pip install``, ``npm install``,
-and ``cargo add``/``cargo install`` commands in real-time before they execute.
+Wraps the user's shell session and intercepts package-install commands in
+real-time before they execute.
 
 Implementation strategy
 -----------------------
 Shell function shadowing: the guard generates a shell init-script that defines
-wrapper functions (``pip``, ``npm``, ``cargo``) which call
-``agentshield guard-scan-cmd "<full command>"`` before delegating to the real
-binary with ``command pip …``.  A non-zero exit from the guard command causes
-the wrapper to abort the install.
+wrapper functions shadowing every supported package-manager binary (pip, pip3,
+``python``/``python3`` for ``-m pip``, uv, npm, yarn, pnpm, bun, cargo, poetry,
+pipx, conda, gem, go).  Each wrapper calls ``agentshield guard-scan-cmd
+"<full command>"`` before delegating to the real binary with ``command pip …``.
+A non-zero exit from the guard command aborts the install.
+
+The set of shadowed binaries and their install-trigger tokens is derived from
+:mod:`agentshield.enforce.registry` (the single source of truth) so coverage is
+defined in exactly one place.  System package managers (apt-get, brew, etc.)
+are additionally shadowed for CVE-scan warnings.
 
 Shell support: bash, zsh, fish (defaults to bash-compatible for unknown shells).
 
@@ -26,327 +32,123 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-# ── shell init scripts ────────────────────────────────────────────────────────
+from agentshield.enforce.registry import MANAGERS
 
-_BASH_INIT = """\
-# AgentShield Guard — bash integration
-# Wrapper functions shadow pip, npm, and cargo.  Install commands are
-# checked by AgentShield before execution; the install is aborted on BLOCK.
-# System package managers (apt-get, brew, etc.) emit warnings but do not block.
+# ── derive the shadow set + gating tokens from the registry ───────────────────
 
-function pip() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd pip "$@" || return 1
-    fi
-    command pip "$@"
+
+def _language_gates() -> dict[str, list[str]]:
+    """Map each managed binary -> sorted list of first-token install triggers."""
+    gates: dict[str, set[str]] = {}
+    for spec in MANAGERS:
+        for binary in spec.binaries:
+            gates.setdefault(binary, set()).update(spec.trigger_tokens)
+    return {b: sorted(t) for b, t in sorted(gates.items())}
+
+
+# System package managers — warn-only (CVE scan may block). Kept explicit
+# because they are detected by syspkg_detector, not the registry, and use the
+# ``--`` separator so typer does not interpret manager flags (e.g. ``pacman -S``).
+# A value of ``None`` means "always scan" (no sub-command gate).
+_SYSPKG_GATES: dict[str, list[str] | None] = {
+    "apt-get": ["install"],
+    "apt": ["install"],
+    "yum": ["install"],
+    "dnf": ["install"],
+    "brew": ["install"],
+    "apk": ["add"],
+    "pacman": None,
+    "zypper": ["in", "install"],
+    "snap": ["install"],
+    "flatpak": ["install"],
 }
 
-function pip3() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd pip3 "$@" || return 1
-    fi
-    command pip3 "$@"
-}
+_GUARD_MSG_LANG = (
+    "[AgentShield Guard] Active — pip, npm, cargo, and other package "
+    "install commands are protected."
+)
+_GUARD_MSG_SYS = (
+    "[AgentShield Guard] System package managers (apt-get, brew, etc.) "
+    "are monitored with CVE scanning."
+)
 
-function npm() {
-    if [[ "$1" == "install" || "$1" == "i" ]]; then
-        agentshield guard-scan-cmd npm "$@" || return 1
-    fi
-    command npm "$@"
-}
 
-function cargo() {
-    if [[ "$1" == "add" || "$1" == "install" ]]; then
-        agentshield guard-scan-cmd cargo "$@" || return 1
-    fi
-    command cargo "$@"
-}
+# ── POSIX (bash/zsh) generation ───────────────────────────────────────────────
 
-# System package managers — CVE scan may block if critical vulns found (v0.9.0)
-# Note: -- stops typer from interpreting package-manager flags (e.g. pacman -S)
-function apt-get() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- apt-get "$@" || return 1
-    fi
-    command apt-get "$@"
-}
 
-function apt() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- apt "$@" || return 1
-    fi
-    command apt "$@"
-}
+def _posix_lang_fn(binary: str, triggers: list[str]) -> str:
+    call = f'agentshield guard-scan-cmd {binary} "$@" || return 1'
+    if triggers:
+        cond = " || ".join(f'"$1" == "{t}"' for t in triggers)
+        body = f"    if [[ {cond} ]]; then\n        {call}\n    fi\n"
+    else:
+        body = f"    {call}\n"
+    return f"function {binary}() {{\n{body}    command {binary} \"$@\"\n}}\n"
 
-function yum() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- yum "$@" || return 1
-    fi
-    command yum "$@"
-}
 
-function dnf() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- dnf "$@" || return 1
-    fi
-    command dnf "$@"
-}
+def _posix_sys_fn(binary: str, triggers: list[str] | None) -> str:
+    call = f'agentshield guard-scan-cmd -- {binary} "$@" || return 1'
+    if triggers:
+        cond = " || ".join(f'"$1" == "{t}"' for t in triggers)
+        body = f"    if [[ {cond} ]]; then\n        {call}\n    fi\n"
+    else:
+        body = f"    {call}\n"
+    return f"function {binary}() {{\n{body}    command {binary} \"$@\"\n}}\n"
 
-function brew() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- brew "$@" || return 1
-    fi
-    command brew "$@"
-}
 
-function apk() {
-    if [[ "$1" == "add" ]]; then
-        agentshield guard-scan-cmd -- apk "$@" || return 1
-    fi
-    command apk "$@"
-}
+def _build_posix(prompt_line: str) -> str:
+    parts = [
+        "# AgentShield Guard — POSIX shell integration\n",
+        "# Wrapper functions shadow package managers. Install commands are checked\n",
+        "# by AgentShield before execution; the install is aborted on BLOCK.\n\n",
+    ]
+    for binary, triggers in _language_gates().items():
+        parts.append(_posix_lang_fn(binary, triggers))
+    parts.append(
+        "\n# System package managers — CVE scan may block if critical vulns found.\n"
+        "# Note: -- stops typer from interpreting package-manager flags (e.g. pacman -S)\n"
+    )
+    for binary, triggers in _SYSPKG_GATES.items():
+        parts.append(_posix_sys_fn(binary, triggers))
+    parts.append(f"\n{prompt_line}\n")
+    parts.append(f'echo "{_GUARD_MSG_LANG}"\n')
+    parts.append(f'echo "{_GUARD_MSG_SYS}"\n')
+    return "".join(parts)
 
-function pacman() {
-    agentshield guard-scan-cmd -- pacman "$@" || return 1
-    command pacman "$@"
-}
 
-function zypper() {
-    if [[ "$1" == "install" || "$1" == "in" ]]; then
-        agentshield guard-scan-cmd -- zypper "$@" || return 1
-    fi
-    command zypper "$@"
-}
+# ── fish generation ───────────────────────────────────────────────────────────
 
-function snap() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- snap "$@" || return 1
-    fi
-    command snap "$@"
-}
 
-function flatpak() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- flatpak "$@" || return 1
-    fi
-    command flatpak "$@"
-}
+def _fish_fn(binary: str, triggers: list[str] | None, *, sep: str) -> str:
+    call = f"agentshield guard-scan-cmd {sep}{binary} $argv; or return 1"
+    if triggers:
+        cond = "; or ".join(f'test "$argv[1]" = "{t}"' for t in triggers)
+        body = f"    if {cond}\n        {call}\n    end\n"
+    else:
+        body = f"    {call}\n"
+    return f"function {binary}\n{body}    command {binary} $argv\nend\n"
 
-export PS1="[guard] $PS1"
-echo "[AgentShield Guard] Active — pip, npm, and cargo install commands are protected."
-echo "[AgentShield Guard] System package managers (apt-get, brew, etc.) are monitored with CVE scanning."
-"""
 
-_ZSH_INIT = """\
-# AgentShield Guard — zsh integration
+def _build_fish() -> str:
+    parts = ["# AgentShield Guard — fish integration\n\n"]
+    for binary, triggers in _language_gates().items():
+        parts.append(_fish_fn(binary, triggers, sep=""))
+    parts.append(
+        "\n# System package managers — CVE scan may block if critical vulns found.\n"
+        "# Note: -- stops fish/typer from interpreting package-manager flags.\n"
+    )
+    for binary, triggers in _SYSPKG_GATES.items():
+        parts.append(_fish_fn(binary, triggers, sep="-- "))
+    parts.append(f'\necho "{_GUARD_MSG_LANG}"\n')
+    parts.append(f'echo "{_GUARD_MSG_SYS}"\n')
+    return "".join(parts)
 
-function pip() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd pip "$@" || return 1
-    fi
-    command pip "$@"
-}
 
-function pip3() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd pip3 "$@" || return 1
-    fi
-    command pip3 "$@"
-}
+# ── generated init scripts ────────────────────────────────────────────────────
 
-function npm() {
-    if [[ "$1" == "install" || "$1" == "i" ]]; then
-        agentshield guard-scan-cmd npm "$@" || return 1
-    fi
-    command npm "$@"
-}
-
-function cargo() {
-    if [[ "$1" == "add" || "$1" == "install" ]]; then
-        agentshield guard-scan-cmd cargo "$@" || return 1
-    fi
-    command cargo "$@"
-}
-
-# System package managers — CVE scan may block if critical vulns found (v0.9.0)
-# Note: -- stops typer from interpreting package-manager flags (e.g. pacman -S)
-function apt-get() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- apt-get "$@" || return 1
-    fi
-    command apt-get "$@"
-}
-
-function apt() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- apt "$@" || return 1
-    fi
-    command apt "$@"
-}
-
-function yum() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- yum "$@" || return 1
-    fi
-    command yum "$@"
-}
-
-function dnf() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- dnf "$@" || return 1
-    fi
-    command dnf "$@"
-}
-
-function brew() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- brew "$@" || return 1
-    fi
-    command brew "$@"
-}
-
-function apk() {
-    if [[ "$1" == "add" ]]; then
-        agentshield guard-scan-cmd -- apk "$@" || return 1
-    fi
-    command apk "$@"
-}
-
-function pacman() {
-    agentshield guard-scan-cmd -- pacman "$@" || return 1
-    command pacman "$@"
-}
-
-function zypper() {
-    if [[ "$1" == "install" || "$1" == "in" ]]; then
-        agentshield guard-scan-cmd -- zypper "$@" || return 1
-    fi
-    command zypper "$@"
-}
-
-function snap() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- snap "$@" || return 1
-    fi
-    command snap "$@"
-}
-
-function flatpak() {
-    if [[ "$1" == "install" ]]; then
-        agentshield guard-scan-cmd -- flatpak "$@" || return 1
-    fi
-    command flatpak "$@"
-}
-
-export PROMPT="[guard] $PROMPT"
-echo "[AgentShield Guard] Active — pip, npm, and cargo install commands are protected."
-echo "[AgentShield Guard] System package managers (apt-get, brew, etc.) are monitored with CVE scanning."
-"""
-
-_FISH_INIT = """\
-# AgentShield Guard — fish integration
-
-function pip
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd pip $argv; or return 1
-    end
-    command pip $argv
-end
-
-function pip3
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd pip3 $argv; or return 1
-    end
-    command pip3 $argv
-end
-
-function npm
-    if test "$argv[1]" = "install"; or test "$argv[1]" = "i"
-        agentshield guard-scan-cmd npm $argv; or return 1
-    end
-    command npm $argv
-end
-
-function cargo
-    if test "$argv[1]" = "add"; or test "$argv[1]" = "install"
-        agentshield guard-scan-cmd cargo $argv; or return 1
-    end
-    command cargo $argv
-end
-
-# System package managers — CVE scan may block if critical vulns found (v0.9.0)
-# Note: -- stops typer from interpreting package-manager flags (e.g. pacman -S)
-function apt-get
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd -- apt-get $argv; or return 1
-    end
-    command apt-get $argv
-end
-
-function apt
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd -- apt $argv; or return 1
-    end
-    command apt $argv
-end
-
-function yum
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd -- yum $argv; or return 1
-    end
-    command yum $argv
-end
-
-function dnf
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd -- dnf $argv; or return 1
-    end
-    command dnf $argv
-end
-
-function brew
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd -- brew $argv; or return 1
-    end
-    command brew $argv
-end
-
-function apk
-    if test "$argv[1]" = "add"
-        agentshield guard-scan-cmd -- apk $argv; or return 1
-    end
-    command apk $argv
-end
-
-function pacman
-    agentshield guard-scan-cmd -- pacman $argv; or return 1
-    command pacman $argv
-end
-
-function zypper
-    if test "$argv[1]" = "install"; or test "$argv[1]" = "in"
-        agentshield guard-scan-cmd -- zypper $argv; or return 1
-    end
-    command zypper $argv
-end
-
-function snap
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd -- snap $argv; or return 1
-    end
-    command snap $argv
-end
-
-function flatpak
-    if test "$argv[1]" = "install"
-        agentshield guard-scan-cmd -- flatpak $argv; or return 1
-    end
-    command flatpak $argv
-end
-
-echo "[AgentShield Guard] Active — pip, npm, and cargo install commands are protected."
-echo "[AgentShield Guard] System package managers (apt-get, brew, etc.) are monitored with CVE scanning."
-"""
+_BASH_INIT = _build_posix('export PS1="[guard] $PS1"')
+_ZSH_INIT = _build_posix('export PROMPT="[guard] $PROMPT"')
+_FISH_INIT = _build_fish()
 
 _SHELL_SCRIPTS: dict[str, str] = {
     "bash": _BASH_INIT,

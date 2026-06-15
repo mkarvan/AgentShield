@@ -691,7 +691,11 @@ def guard(
     raise typer.Exit(code=exit_code)
 
 
-@app.command("guard-scan-cmd", hidden=True)
+@app.command(
+    "guard-scan-cmd",
+    hidden=True,
+    context_settings={"ignore_unknown_options": True},
+)
 def guard_scan_cmd(
     args: list[str] = typer.Argument(..., help="Command tokens to scan (e.g. pip install pkg)"),
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
@@ -707,11 +711,7 @@ def guard_scan_cmd(
 
     from agentshield.analyzers.syspkg_detector import detect_syspkg_commands
     from agentshield.core.config import Config
-    from agentshield.integrations.hermes.plugin import (
-        _find_shell_suspicions,
-        _parse_shell_manifests,
-        _parse_shell_packages,
-    )
+    from agentshield.enforce import registry
 
     command = shlex.join(args)
     err_console = Console(stderr=True)
@@ -787,41 +787,77 @@ def guard_scan_cmd(
                         console.print(f"  • {rule_id}: {title}")
                     raise typer.Exit(code=1)
 
-    manifest_paths, manifest_suspicions = _parse_shell_manifests(command)
-    suspicions = _find_shell_suspicions(command) + manifest_suspicions
+    manifest_paths, manifest_suspicions = registry.parse_manifests(command)
+    suspicions = registry.find_suspicions(command) + manifest_suspicions
     if suspicions:
         err_console.print("[red]AgentShield: cannot verify package source:[/red]")
         for s in suspicions:
             err_console.print(f"  • {s}")
         raise typer.Exit(code=1)
 
-    pkg_list = _parse_shell_packages(command)
-    if not pkg_list and not manifest_paths:
+    installs = registry.parse_command(command)
+    if not installs and not manifest_paths:
         return  # no packages detected, allow
 
-    requests_list = [
-        ScanRequest(package=pkg, ecosystem=eco, source="guard") for pkg, eco in pkg_list
-    ]
+    # Recognised but unverifiable managers (gem/go — no scan backend) cannot be
+    # cleared, so fail closed.
+    unverifiable: list[tuple[str, str]] = []
+    requests_list: list[ScanRequest] = []
+    for inst in installs:
+        if inst.ecosystem is None:
+            for pkg in inst.packages or ["<unspecified>"]:
+                unverifiable.append(
+                    (pkg, f"'{inst.manager}' has no scan backend — cannot verify")
+                )
+            continue
+        requests_list.extend(
+            ScanRequest(package=pkg, ecosystem=inst.ecosystem, source="guard")
+            for pkg in inst.packages
+        )
 
     # (label, decision) pairs covering both named packages and manifest files.
+    # Scanner errors fail closed (treated as BLOCK).
     async def _run() -> list[tuple[str, Decision]]:
         results: list[tuple[str, Decision]] = []
         for req in requests_list:
-            res = await shield.ascan(req)
-            results.append((req.package, res.decision))
+            try:
+                res = await shield.ascan(req)
+                results.append((req.package, res.decision))
+            except Exception as exc:  # noqa: BLE001 — fail closed
+                results.append(
+                    (
+                        req.package,
+                        Decision(
+                            action=DecisionAction.BLOCK,
+                            reason=f"scan failed ({exc}); blocking to fail closed",
+                        ),
+                    )
+                )
         for manifest in manifest_paths:
             manifest_path = Path(manifest)
             if not manifest_path.exists():
                 continue
-            file_res = await shield.ascan_file(manifest_path)
-            results.append((manifest, file_res.aggregate_decision))
+            try:
+                file_res = await shield.ascan_file(manifest_path)
+                results.append((manifest, file_res.aggregate_decision))
+            except Exception as exc:  # noqa: BLE001 — fail closed
+                results.append(
+                    (
+                        manifest,
+                        Decision(
+                            action=DecisionAction.BLOCK,
+                            reason=f"scan failed ({exc}); blocking to fail closed",
+                        ),
+                    )
+                )
         return results
 
     results = asyncio.run(_run())
 
-    blocked = [(label, d) for label, d in results if d.action == DecisionAction.BLOCK]
+    blocked = [(label, d.reason) for label, d in results if d.action == DecisionAction.BLOCK]
+    blocked.extend(unverifiable)
     warned = [
-        (label, d)
+        (label, d.reason)
         for label, d in results
         if d.action in (DecisionAction.NEEDS_CONFIRMATION, DecisionAction.LOG_ASYNC)
     ]
@@ -830,15 +866,15 @@ def guard_scan_cmd(
         console.print(
             f"[yellow]AgentShield: {len(warned)} item(s) flagged for review[/yellow]",
         )
-        for label, d in warned:
-            console.print(f"  • {label}: {d.reason}")
+        for label, reason in warned:
+            console.print(f"  • {label}: {reason}")
 
     if blocked:
         console.print(
             f"[red]AgentShield BLOCKED {len(blocked)} item(s):[/red]",
         )
-        for label, d in blocked:
-            console.print(f"  • {label}: {d.reason}")
+        for label, reason in blocked:
+            console.print(f"  • {label}: {reason}")
         raise typer.Exit(code=1)
 
 
@@ -1161,6 +1197,83 @@ def _print_result(result: ScanResult, wall_ms: int | None = None) -> None:
 
     if result.transitive_results:
         _print_transitive_results(result.transitive_results)
+
+
+# ── enforcement layer (shim / execve / proxy) ────────────────────────────────
+
+shim_app = typer.Typer(name="shim", help="Manage the PATH-shim enforcement baseline.")
+app.add_typer(shim_app)
+
+
+@shim_app.command("install")
+def shim_install(
+    directory: Path | None = typer.Option(
+        None, "--dir", "-d", help="Shim directory (default: ~/.agentshield/shim)"
+    ),
+) -> None:
+    """Install PATH-shim wrappers for every managed package-manager binary."""
+    from agentshield.enforce import shim
+
+    shim_dir, installed = shim.install(directory)
+    console.print(f"[green]Installed {len(installed)} shim(s) in {shim_dir}[/green]")
+    console.print("Add this to your shell profile so the shims take precedence:")
+    console.print(f"  [cyan]{shim.path_export_line(shim_dir)}[/cyan]")
+    console.print(
+        "[dim]Note: covers PATH-resolved invocations. For absolute-path calls "
+        "(/usr/bin/pip) also enable the execve interceptor (Linux).[/dim]"
+    )
+
+
+@shim_app.command("uninstall")
+def shim_uninstall(
+    directory: Path | None = typer.Option(
+        None, "--dir", "-d", help="Shim directory (default: ~/.agentshield/shim)"
+    ),
+) -> None:
+    """Remove AgentShield PATH-shim wrappers."""
+    from agentshield.enforce import shim
+
+    removed = shim.uninstall(directory)
+    console.print(f"[green]Removed {len(removed)} shim(s).[/green]")
+
+
+@app.command("enforce-build")
+def enforce_build(
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Output .so path (default: ~/.agentshield/libagentshield_exec.so)"
+    ),
+) -> None:
+    """Compile the Linux execve interceptor (LD_PRELOAD library)."""
+    from agentshield.enforce import execve
+
+    try:
+        so_path = execve.build(output)
+    except RuntimeError as exc:
+        console.print(f"[red]Could not build execve interceptor:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]Built {so_path}[/green]")
+    console.print("Activate it for a session with:")
+    console.print(f"  [cyan]{execve.preload_env_line(so_path)}[/cyan]")
+
+
+@app.command("proxy")
+def proxy(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
+    port: int = typer.Option(8799, "--port", "-p", help="Bind port"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+) -> None:
+    """Run the scanning index proxy (primary gate).
+
+    Point pip/npm at it, e.g.::
+
+        PIP_INDEX_URL=http://127.0.0.1:8799/simple/ pip install <pkg>
+    """
+    from agentshield.core.config import Config
+    from agentshield.enforce import proxy as proxy_mod
+
+    cfg = Config.load(config)
+    console.print(f"[cyan]AgentShield index proxy on http://{host}:{port}[/cyan]  (Ctrl-C to stop)")
+    proxy_mod.serve(host=host, port=port, config=cfg)
 
 
 if __name__ == "__main__":

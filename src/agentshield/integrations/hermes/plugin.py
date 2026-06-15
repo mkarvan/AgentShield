@@ -6,10 +6,16 @@ Intercepts two categories of tool calls:
    package name/version come directly from the tool call arguments.
 
 2. **Shell tools** — ``bash``, ``shell``, ``run_command``, ``execute``, ``terminal``:
-   the command string is parsed for ``pip install``, ``pip3 install``,
-   ``python -m pip install``, ``uv pip install``, ``npm install``, ``npm i``,
-   ``yarn add``, ``cargo add``, and ``cargo install`` patterns.  Each detected
-   package is scanned before the command is allowed to run.
+   the command string is parsed (via :mod:`agentshield.enforce.registry`, the
+   single source of truth for manager coverage) for any supported package-install
+   invocation — pip/pip3, ``python -m pip``, ``uv pip``/``uv add``, npm/yarn/
+   pnpm/bun, cargo, poetry, pipx, conda, and gem/go.  Each detected package is
+   scanned before the command is allowed to run.
+
+**Fail-closed:** if a detected install cannot be verified — an unanalyzable
+argument (shell expansion / VCS URL), a recognised-but-unsupported manager
+(gem/go, which have no scan backend), or a scanner error — the command is
+blocked rather than allowed through.
 
 Usage in ``hermes_config.yaml``::
 
@@ -20,13 +26,14 @@ Usage in ``hermes_config.yaml``::
 
 from __future__ import annotations
 
-import re
+import logging
 from pathlib import Path
 from typing import Any
 
 from agentshield.core.config import Config
 from agentshield.core.models import DecisionAction, Ecosystem, Finding, ScanRequest
 from agentshield.core.scanner import AgentShield
+from agentshield.enforce import registry
 
 try:
     from hermes.tools import ToolCall, ToolPlugin, ToolResult  # type: ignore[import-not-found]
@@ -36,6 +43,8 @@ except ImportError:
         ToolPlugin,
         ToolResult,
     )
+
+logger = logging.getLogger(__name__)
 
 # ── structured tool-call mapping ─────────────────────────────────────────────
 
@@ -49,100 +58,28 @@ _TOOL_ECOSYSTEM: dict[str, Ecosystem] = {
 
 _SHELL_TOOLS = frozenset({"bash", "shell", "run_command", "execute", "terminal"})
 
-# ── install-command detection regexes ────────────────────────────────────────
 
-# Each tuple: (pattern that captures the argument portion, ecosystem).
-# The argument portion is everything after the install subcommand up to a shell
-# statement boundary (newline, ; & | characters).
-_INSTALL_PATTERNS: list[tuple[re.Pattern[str], Ecosystem]] = [
-    (
-        re.compile(
-            r"(?:pip3?|python3?(?:\.\d+)?\s+-m\s+pip|uv\s+pip)\s+install"
-            r"\s+((?:[^\n;&|]|\\\n)+)",
-            re.IGNORECASE,
-        ),
-        Ecosystem.PYPI,
-    ),
-    (
-        re.compile(
-            r"npm\s+(?:install|i)\s+((?:[^\n;&|]|\\\n)+)",
-            re.IGNORECASE,
-        ),
-        Ecosystem.NPM,
-    ),
-    (
-        re.compile(
-            r"yarn\s+add\s+((?:[^\n;&|]|\\\n)+)",
-            re.IGNORECASE,
-        ),
-        Ecosystem.NPM,
-    ),
-    (
-        re.compile(
-            r"cargo\s+(?:add|install)\s+((?:[^\n;&|]|\\\n)+)",
-            re.IGNORECASE,
-        ),
-        Ecosystem.CARGO,
-    ),
-]
+# ── backward-compatible module-level helpers (delegate to the registry) ───────
+# These names are part of the plugin's existing public surface (imported by the
+# CLI and tests); they now forward to the shared registry so coverage is defined
+# in exactly one place.
 
-# Flags that consume the next token when written without = (e.g. -r req.txt vs --requirement=req.txt)
-_VALUE_FLAGS = frozenset(
-    {
-        # pip / pip3 / uv pip
-        "-t",
-        "--target",
-        "-d",
-        "--download",
-        "-i",
-        "--index-url",
-        "--extra-index-url",
-        "-r",
-        "--requirement",
-        "-c",
-        "--constraint",
-        "-f",
-        "--find-links",
-        "--trusted-host",
-        "--proxy",
-        "--retries",
-        "--timeout",
-        "--exists-action",
-        "--cert",
-        "--client-cert",
-        "--cache-dir",
-        "-e",
-        "--editable",
-        "--platform",
-        "--python-version",
-        "--abi",
-        "--implementation",
-        "--prefix",
-        "--src",
-        "--root",
-        # npm
-        "--registry",
-        "--tag",
-        "--scope",
-        "-w",
-        "--workspace",
-        # cargo
-        "--version",
-        "-p",
-        "--package",
-        "--manifest-path",
-        # yarn
-        "--cwd",
-    }
-)
+_tokenize_packages = registry.tokenize_packages
 
-# Matches a valid package spec and captures the bare name in group 1.
-# Handles: requests, requests==2.28.0, requests[security], requests[security]>=2
-_PKG_SPEC_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(?:[><=!~^@][^\s]*)?$")
 
-# Patterns in install args that we cannot statically resolve
-_EXPANSION_RE = re.compile(r"\$(?:\{[^}]*\}|\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)")
-_GIT_URL_RE = re.compile(r"git\+(?:https?|ssh)://\S+", re.IGNORECASE)
+def _parse_shell_packages(command: str) -> list[tuple[str, Ecosystem]]:
+    """``(bare_package_name, ecosystem)`` pairs for verifiable managers."""
+    return registry.parse_packages(command)
+
+
+def _find_shell_suspicions(command: str) -> list[str]:
+    """Descriptions of install-arg patterns that cannot be statically analyzed."""
+    return registry.find_suspicions(command)
+
+
+def _parse_shell_manifests(command: str) -> tuple[list[str], list[str]]:
+    """``(local_paths, suspicions)`` for pip ``-r``/``-c`` manifest references."""
+    return registry.parse_manifests(command)
 
 
 # ── helpers (module-level, testable) ─────────────────────────────────────────
@@ -155,103 +92,6 @@ def _extract_command(args: dict[str, Any]) -> str | None:
         if isinstance(val, str):
             return val
     return None
-
-
-def _parse_shell_packages(command: str) -> list[tuple[str, Ecosystem]]:
-    """Scan *command* for package-install invocations.
-
-    Returns a list of ``(bare_package_name, ecosystem)`` pairs, one per
-    package found across all install invocations in the command string.
-    """
-    results: list[tuple[str, Ecosystem]] = []
-    for pattern, ecosystem in _INSTALL_PATTERNS:
-        for match in pattern.finditer(command):
-            for pkg in _tokenize_packages(match.group(1)):
-                results.append((pkg, ecosystem))
-    return results
-
-
-def _tokenize_packages(args_str: str) -> list[str]:
-    """Extract bare package names from the argument portion of an install command."""
-    # Normalize POSIX line continuations (backslash-newline)
-    args_str = re.sub(r"\\\n", " ", args_str)
-    tokens = args_str.split()
-    packages: list[str] = []
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if token.startswith("-"):
-            # Skip value-taking flags along with their argument
-            if token in _VALUE_FLAGS and "=" not in token:
-                i += 2
-            else:
-                i += 1
-            continue
-        # Skip filesystem paths, plain URLs, and VCS URLs (git+https:// etc.)
-        if re.match(r"^(?:[/~.]|https?://|git\+)", token):
-            i += 1
-            continue
-        m = _PKG_SPEC_RE.match(token)
-        if m:
-            packages.append(m.group(1))
-        i += 1
-    return packages
-
-
-def _find_shell_suspicions(command: str) -> list[str]:
-    """Return descriptions of install-arg patterns that cannot be statically analyzed.
-
-    Covers: shell variable/command expansion ($VAR, ${VAR}, $(cmd)) and VCS URLs
-    (git+https://, git+ssh://) where the real package identity cannot be verified.
-    """
-    suspicions: list[str] = []
-    for pattern, _ in _INSTALL_PATTERNS:
-        for match in pattern.finditer(command):
-            args_str = match.group(1)
-            for var_match in _EXPANSION_RE.finditer(args_str):
-                suspicions.append(
-                    f"shell variable/command expansion '{var_match.group()}' in package position"
-                )
-            for git_match in _GIT_URL_RE.finditer(args_str):
-                suspicions.append(f"unanalyzable VCS URL '{git_match.group()}'")
-    return suspicions
-
-
-# pip flags that reference a requirements/constraint manifest file.
-_MANIFEST_FLAGS = frozenset({"-r", "--requirement", "-c", "--constraint"})
-
-
-def _parse_shell_manifests(command: str) -> tuple[list[str], list[str]]:
-    """Find pip ``-r``/``-c`` manifest references in *command*.
-
-    Returns ``(local_paths, suspicions)``. Local file paths are scanned with
-    ``ascan_file``; remote references (http(s)://) are returned as suspicions
-    because their contents cannot be statically verified.
-    """
-    paths: list[str] = []
-    suspicions: list[str] = []
-    for pattern, ecosystem in _INSTALL_PATTERNS:
-        if ecosystem is not Ecosystem.PYPI:
-            continue
-        for match in pattern.finditer(command):
-            tokens = re.sub(r"\\\n", " ", match.group(1)).split()
-            i = 0
-            while i < len(tokens):
-                flag, _, inline = tokens[i].partition("=")
-                if flag in _MANIFEST_FLAGS:
-                    if inline:
-                        value = inline
-                    elif i + 1 < len(tokens):
-                        value = tokens[i + 1]
-                        i += 1
-                    else:
-                        value = ""
-                    if value and "://" in value:
-                        suspicions.append(f"unanalyzable remote requirements file '{value}'")
-                    elif value:
-                        paths.append(value)
-                i += 1
-    return paths, suspicions
 
 
 # ── plugin ────────────────────────────────────────────────────────────────────
@@ -286,7 +126,14 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
 
     async def _handle_tool_call(self, call: ToolCall) -> ToolCall | ToolResult:
         request = self._build_scan_request(call)
-        result = await self.shield.ascan(request)
+        try:
+            result = await self.shield.ascan(request)
+        except Exception as exc:  # noqa: BLE001 — fail closed on any scanner error
+            logger.warning("AgentShield scan error for %s: %s", request.package, exc)
+            return ToolResult.error(
+                f"AgentShield blocked {call.name}: scan failed for "
+                f"'{request.package}' ({exc}); blocking to fail closed."
+            )
 
         if result.decision.action == DecisionAction.BLOCK:
             return ToolResult.error(f"AgentShield blocked {call.name}: {result.decision.reason}")
@@ -306,42 +153,66 @@ class AgentShieldPlugin(ToolPlugin):  # type: ignore[misc]
         if not command:
             return call
 
-        # Check for patterns that cannot be statically analyzed (must happen before
-        # _parse_shell_packages so that commands like `pip install $PKG` that produce
-        # an empty pkg_list are not accidentally passed through)
-        manifest_paths, manifest_suspicions = _parse_shell_manifests(command)
-        suspicions = _find_shell_suspicions(command) + manifest_suspicions
+        # Patterns that cannot be statically analyzed (shell expansion, VCS URLs,
+        # remote requirements files) — fail closed before scanning anything.
+        manifest_paths, manifest_suspicions = registry.parse_manifests(command)
+        suspicions = registry.find_suspicions(command) + manifest_suspicions
         if suspicions:
             return ToolResult.error(
                 "AgentShield blocked shell command — cannot verify package source:\n"
                 + "\n".join(f"  • {s}" for s in suspicions)
             )
 
-        pkg_list = _parse_shell_packages(command)
-        if not pkg_list and not manifest_paths:
+        installs = registry.parse_command(command)
+        if not installs and not manifest_paths:
             return call
 
         blocked_messages: list[str] = []
         confirmation_findings: list[Finding] = []
 
-        for pkg_name, ecosystem in pkg_list:
-            request = ScanRequest(
-                package=pkg_name,
-                ecosystem=ecosystem,
-                source="hermes",
-            )
-            result = await self.shield.ascan(request)
-            if result.decision.action == DecisionAction.BLOCK:
-                blocked_messages.append(f"{pkg_name}: {result.decision.reason}")
-            elif result.decision.action == DecisionAction.NEEDS_CONFIRMATION:
-                confirmation_findings.extend(result.findings)
+        for inst in installs:
+            # Recognised but unverifiable manager (e.g. gem, go) — no scan backend,
+            # so we cannot clear it. Fail closed.
+            if inst.ecosystem is None:
+                for pkg in inst.packages or ["<unspecified>"]:
+                    blocked_messages.append(
+                        f"{pkg}: '{inst.manager}' has no scan backend — cannot verify "
+                        f"(blocking to fail closed)"
+                    )
+                continue
+
+            for pkg_name in inst.packages:
+                request = ScanRequest(
+                    package=pkg_name,
+                    ecosystem=inst.ecosystem,
+                    source="hermes",
+                )
+                try:
+                    result = await self.shield.ascan(request)
+                except Exception as exc:  # noqa: BLE001 — fail closed
+                    logger.warning("AgentShield scan error for %s: %s", pkg_name, exc)
+                    blocked_messages.append(
+                        f"{pkg_name}: scan failed ({exc}); blocking to fail closed"
+                    )
+                    continue
+                if result.decision.action == DecisionAction.BLOCK:
+                    blocked_messages.append(f"{pkg_name}: {result.decision.reason}")
+                elif result.decision.action == DecisionAction.NEEDS_CONFIRMATION:
+                    confirmation_findings.extend(result.findings)
 
         # Scan packages declared in referenced requirements/constraint files.
         for manifest in manifest_paths:
             manifest_path = Path(manifest)
             if not manifest_path.exists():
                 continue
-            file_result = await self.shield.ascan_file(manifest_path)
+            try:
+                file_result = await self.shield.ascan_file(manifest_path)
+            except Exception as exc:  # noqa: BLE001 — fail closed
+                logger.warning("AgentShield scan error for manifest %s: %s", manifest, exc)
+                blocked_messages.append(
+                    f"{manifest}: scan failed ({exc}); blocking to fail closed"
+                )
+                continue
             action = file_result.aggregate_decision.action
             if action == DecisionAction.BLOCK:
                 blocked_messages.append(f"{manifest}: {file_result.aggregate_decision.reason}")

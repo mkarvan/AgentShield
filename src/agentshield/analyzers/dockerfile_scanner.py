@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 from agentshield.core.models import Ecosystem, ScanRequest
-from agentshield.integrations.hermes.plugin import _INSTALL_PATTERNS, _tokenize_packages
+from agentshield.enforce import registry
 
 # Match a RUN instruction, capturing everything after "RUN "
 _RUN_RE = re.compile(
@@ -43,21 +43,21 @@ def parse_dockerfile(path: Path) -> list[ScanRequest]:
         if command.startswith("["):
             command = _exec_form_to_shell(command)
 
-        for pattern, ecosystem in _INSTALL_PATTERNS:
-            for m in pattern.finditer(command):
-                for pkg_name in _tokenize_packages(m.group(1)):
-                    key = (pkg_name.lower(), ecosystem)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    requests.append(
-                        ScanRequest(
-                            package=pkg_name,
-                            version=None,
-                            ecosystem=ecosystem,
-                            source="dockerfile",
-                        )
-                    )
+        # registry.parse_packages yields (package, ecosystem) for every
+        # verifiable manager (pip/uv/pipx/poetry/conda, npm/yarn/pnpm/bun, cargo).
+        for pkg_name, ecosystem in registry.parse_packages(command):
+            key = (pkg_name.lower(), ecosystem)
+            if key in seen:
+                continue
+            seen.add(key)
+            requests.append(
+                ScanRequest(
+                    package=pkg_name,
+                    version=None,
+                    ecosystem=ecosystem,
+                    source="dockerfile",
+                )
+            )
 
     return requests
 

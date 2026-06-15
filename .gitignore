@@ -71,3 +71,6 @@ memory/
 *.tar.gz
 *.whl
 site/
+
+# Internal planning doc — do not commit
+docs/real-fix-plan.md

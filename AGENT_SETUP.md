@@ -56,15 +56,23 @@ pip install "agentshield[openclaw] @ git+https://github.com/mkarvan/AgentShield.
 pip install "agentshield[all] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
+> **Externally-managed Python (PEP 668).** On Debian/Ubuntu/Alpine system
+> interpreters, pip refuses a global install. Either use a virtualenv
+> (`python -m venv .venv && . .venv/bin/activate`) or opt in with
+> `pip install --break-system-packages "agentshield @ git+https://github.com/mkarvan/AgentShield.git"`.
+> On minimal images that ship `uv` but no `pip`, use
+> `uv pip install --system --break-system-packages "agentshield @ git+https://github.com/mkarvan/AgentShield.git"`
+> (bootstrap pip first with `python3 -m ensurepip --upgrade` if you need it).
+
 **Verify installation:**
 ```bash
 agentshield --version
 ```
-Expected output: `agentshield 0.7.0` (or higher).
+Expected output: `agentshield 0.9.0` (or higher).
 
 If `agentshield` is not found, the pip bin directory may not be on PATH. Try:
 ```bash
-python3 -m agentshield --version
+python3 -m agentshield.cli --version
 ```
 
 ---
@@ -648,6 +656,11 @@ agentshield diff-scan old-requirements.txt new-requirements.txt
 # Scan packages referenced in a Dockerfile
 agentshield scan-docker Dockerfile
 
+# Claude Code / Codex PreToolUse hook (reads the hook payload as JSON on stdin;
+# configured in .claude/settings.json or ~/.codex/hooks.json, not run by hand)
+agentshield hook                 # Claude Code dialect (default)
+agentshield hook --agent codex   # Codex dialect (warn-level findings fail closed)
+
 # Start MCP server (agents connect to this)
 agentshield serve --mcp
 
@@ -679,9 +692,9 @@ python3 -m site --user-base
 export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ```
 
-Or invoke via Python directly:
+Or invoke via Python directly (the runnable module is `agentshield.cli`):
 ```bash
-python3 -m agentshield scan requests
+python3 -m agentshield.cli scan requests
 ```
 
 ---
@@ -750,6 +763,24 @@ If OSV is unreachable, check your network. The OSV bulk export URL is `https://o
    # ['bash', 'cargo_add', 'execute', 'npm_install', 'pip_install', 'run_command', 'shell', 'terminal']
    ```
    If your Hermes agent uses a different tool name (e.g. `run_bash`), subclass the plugin and add the name to `intercepts` as described in the setup section above.
+
+---
+
+### Claude Code / Codex hook not firing
+
+1. Confirm `agentshield` is on `PATH` for the process that launches the agent:
+   ```bash
+   command -v agentshield && echo '{"tool_name":"Bash","tool_input":{"command":"gem install foo"}}' | agentshield hook
+   ```
+   A blocked command prints `{"hookSpecificOutput": {... "permissionDecision": "deny" ...}}`; a clean/benign command prints nothing and exits 0.
+
+2. Check the config matcher is `"Bash"` and the JSON is well-formed — Claude Code reads `.claude/settings.json`; Codex reads `~/.codex/hooks.json` **and** needs `codex_hooks = true` under `[features]` in `~/.codex/config.toml`. Restart the agent after editing.
+
+3. **Tool-name coverage.** Both agents currently only emit `PreToolUse` for the `Bash` tool, so the hook intercepts shell commands — not structured/MCP file-edit tools. AgentShield then parses the command for any of its 15 supported package managers (pip/pip3, `python -m pip`, uv, pipx, poetry, conda, npm/yarn/pnpm/bun, cargo, plus gem/go as unverifiable). A package manager the registry doesn't recognise won't be scanned (and isn't blocked); an unverifiable one (gem/go, untrusted conda channel) fails closed (`deny`).
+
+4. **Codex scope.** Codex's `PreToolUse` only intercepts "simple" Bash calls and a model can bypass it by writing a script to disk and running it — so pair the hook with the PATH shim / `LD_PRELOAD` interceptor / index proxy for hard enforcement. Use `--agent codex` so warn-level findings (which Codex would otherwise allow, since it doesn't honor `"ask"`) fail closed.
+
+5. The hook **fails closed on scan errors** but treats a malformed/empty payload as a no-op (exit 0, no decision) rather than blocking every command — so an empty result on a non-install command is expected, not a failure.
 
 ---
 

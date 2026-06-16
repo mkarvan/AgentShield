@@ -1467,17 +1467,27 @@ sh scripts/container_install_deps.sh
 #    version under test. On an externally-managed Python (PEP 668: Debian/Ubuntu/
 #    Alpine system interpreters), pip refuses a global install unless you opt in:
 pip install --break-system-packages .       # or: python -m pip install . in a venv
+# Minimal Alpine images often have `uv` but no `pip`:
+#   uv pip install --system --reinstall --break-system-packages .
+# No pip and no uv? Bootstrap first: python3 -m ensurepip --upgrade
 
 # 3. Run the harness.
 sh scripts/container_e2e_test.sh
 ```
 
-From the host you can pipe the scripts in instead of copying them:
+From the host you can `container cp` the repo in and pipe the scripts over
+stdin instead of copying them by hand — **the `-i` flag is required**, because
+the scripts are read from stdin (`sh < script`); without `-i` the exec'd shell
+gets no stdin and exits silently with no output:
 
 ```sh
-container exec <container-id> sh < scripts/container_install_deps.sh
-container exec <container-id> sh < scripts/container_e2e_test.sh
+container cp . <container-id>:/work/AgentShield     # a path the harness auto-detects
+container exec -i <container-id> sh < scripts/container_install_deps.sh
+container exec -i <container-id> sh < scripts/container_e2e_test.sh
 ```
+
+See [`scripts/README.md`](scripts/README.md) for the full validated flow,
+install variants, and Alpine/musl notes.
 
 `container_install_deps.sh` detects the package manager
 (`apk` / `apt-get` / `dnf` / `yum` / `pacman` / `zypper`) and installs the C
@@ -1497,13 +1507,15 @@ the harness will simply test the build it finds on `PATH`.
 
 ### What a passing run looks like
 
-Per-feature `PASS`/`FAIL`/`SKIP` lines, a final `RESULT TABLE`, then a summary:
+Per-feature `PASS`/`FAIL`/`SKIP` lines, a final `RESULT TABLE`, then a summary.
+On a fully-provisioned container with network the validated result is:
 
 ```
-SUMMARY: N/N passed, K skipped — ALL GRADED CHECKS PASSED.
+SUMMARY: 78/78 passed, 0 skipped — ALL GRADED CHECKS PASSED.
 ```
 
-Exit code is `0` only when there are no failures. `SKIP`s are environment-gated:
+(the exact case count moves as the harness grows). Exit code is `0` only when
+there are no failures. `SKIP`s are environment-gated:
 a missing C compiler skips the `LD_PRELOAD` build, a missing `bash` skips the
 PATH-shim functional cases, and no network skips the proxy transitive-dependency
 resolution. Run `container_install_deps.sh` first to eliminate the
@@ -1559,10 +1571,10 @@ NVD_API_KEY=... GITHUB_TOKEN=ghp_... pytest tests/integration/ -v -m integration
 ### Changes to enforcement layers
 
 If your change touches a runtime enforcement surface (the Hermes/OpenClaw
-plugins, `guard-scan-cmd`, the PATH shim, the `LD_PRELOAD` execve interceptor, or
-the index proxy), also run the container harness described in
-[Testing](#testing) against a provisioned container and confirm a clean
-`ALL GRADED CHECKS PASSED` run before submitting.
+plugins, the Claude Code / Codex `agentshield hook`, `guard-scan-cmd`, the PATH
+shim, the `LD_PRELOAD` execve interceptor, or the index proxy), also run the
+container harness described in [Testing](#testing) against a provisioned
+container and confirm a clean `ALL GRADED CHECKS PASSED` run before submitting.
 
 ### Test structure
 

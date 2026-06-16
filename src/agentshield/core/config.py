@@ -133,11 +133,26 @@ class TrustScoreConfig(BaseModel):
 class SysPkgConfig(BaseModel):
     """System package CVE scanning configuration (v0.9.0).
 
+    Detection (``enabled``) is on by default and always emits the lightweight
+    ``SP1.1`` warning for system package-manager invocations. CVE scanning
+    (``cve_scan``) is *opt-in*: it makes live network calls to OSV and distro
+    trackers, and historically blocked everyday installs (``apt-get install
+    curl``, ``yum install httpd``) on the many low/medium CVEs that ship with
+    distro packages. It stays off unless a user explicitly turns it on.
+
+    When ``cve_scan`` is enabled:
+    - ``severity_floor`` drops findings below the floor (default HIGH) so that
+      noisy MEDIUM/LOW distro CVEs don't drown the user.
+    - ``max_findings`` caps how many findings are surfaced (default 50); any
+      overflow is summarised as "+N more".
+
     Configure in config.toml under [syspkg]:
 
         [syspkg]
-        enabled = true
-        cve_scan = true
+        enabled = true        # detect + warn (SP1.1); default true
+        cve_scan = false      # live CVE scan; opt-in, default false
+        severity_floor = "HIGH"
+        max_findings = 50
 
         [syspkg.severity_policy]
         critical = "block"
@@ -148,7 +163,9 @@ class SysPkgConfig(BaseModel):
     """
 
     enabled: bool = True
-    cve_scan: bool = True
+    cve_scan: bool = False
+    severity_floor: Severity = Severity.HIGH
+    max_findings: int = 50
     severity_policy: SeverityPolicy = Field(default_factory=SeverityPolicy)
 
 

@@ -731,6 +731,18 @@ def guard_scan_cmd(
             cve_scanner = SysPkgCVEScanner(db_path=cfg.cache.db_path)
             cve_findings = asyncio.run(cve_scanner.scan_warnings(syspkg_warnings))
 
+            # ── severity floor: drop noisy low/medium distro CVEs ──────────
+            floor = cfg.syspkg.severity_floor
+            cve_findings = [f for f in cve_findings if f.severity >= floor]
+
+            # ── findings cap: keep the highest-severity N, summarise rest ──
+            cap = cfg.syspkg.max_findings
+            cve_overflow = 0
+            if cap >= 0 and len(cve_findings) > cap:
+                cve_findings.sort(key=lambda f: f.severity, reverse=True)
+                cve_overflow = len(cve_findings) - cap
+                cve_findings = cve_findings[:cap]
+
             if cve_findings:
                 # Evaluate each finding against syspkg severity policy
                 syspkg_policy = cfg.syspkg.severity_policy
@@ -778,6 +790,12 @@ def guard_scan_cmd(
                     )
                     for rule_id, title in cve_warned:
                         console.print(f"  • {rule_id}: {title}")
+
+                if cve_overflow:
+                    console.print(
+                        f"[yellow]  …and {cve_overflow} more finding(s) "
+                        f"(showing top {cfg.syspkg.max_findings} by severity)[/yellow]",
+                    )
 
                 if cve_blocked:
                     console.print(

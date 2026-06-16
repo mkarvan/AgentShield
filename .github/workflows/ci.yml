@@ -47,6 +47,23 @@ jobs:
           files: ./coverage.xml
         continue-on-error: true
 
+  e2e:
+    name: E2E tests (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps
+        run: pip install -e ".[dev]"
+      - name: Run E2E tests (no network)
+        # CVE scanning is opt-in, so the default E2E suite is fully offline and
+        # deterministic. Tests that hit live OSV/distro trackers are marked
+        # `network` (and `slow`) and excluded here.
+        run: pytest tests/e2e -m "not network" -v
+
   integration:
     name: Integration tests (network)
     runs-on: ubuntu-latest

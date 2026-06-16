@@ -1,6 +1,9 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.10
+    # Pinned to match the ruff version in pyproject.toml [dev] / CI. Keep these
+    # in sync: an older ruff here (e.g. v0.4.10) lints/formats differently and
+    # fights CI (e.g. UP038, f-string formatting).
+    rev: v0.15.17
     hooks:
       - id: ruff
         args: [--fix]

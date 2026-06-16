@@ -5,4 +5,7 @@
   language: python
   types: [file]
   files: '(requirements.*\.txt|Pipfile\.lock|package-lock\.json|package\.json|Cargo\.lock|Cargo\.toml|pyproject\.toml)$'
-  additional_dependencies: ['agentshield']
+  # AgentShield is not published on PyPI, so a bare ['agentshield'] dependency
+  # is unresolvable. Install from the Git repository instead. (Switch this to a
+  # plain version spec, e.g. ['agentshield>=0.9'], once it is released to PyPI.)
+  additional_dependencies: ['agentshield @ git+https://github.com/mkarvan/AgentShield.git']

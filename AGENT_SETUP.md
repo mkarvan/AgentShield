@@ -407,7 +407,65 @@ Pass context_hint to agentshield_scan to explain why you want the package.
 
 ### Framework: Claude Code
 
-A native Claude Code hook integration (via `agentshield.integrations.claude_code`) is reserved for a future release — importing it currently raises `NotImplementedError`. Use the MCP server option above instead: Claude Code fully supports MCP and `agentshield serve --mcp` is the recommended path for Claude Code users.
+Claude Code has a native `PreToolUse` hook integration via the `agentshield hook` subcommand (implemented in `agentshield.integrations.claude_code`). The hook reads Claude Code's PreToolUse payload from **stdin**, scans every package install in the pending `Bash` command through the shared scan core, and emits Claude Code's `permissionDecision` contract on stdout.
+
+Add this to `.claude/settings.json` (project- or user-level):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "agentshield hook" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Behaviour:
+
+- **Malicious / vulnerable package** → `permissionDecision: "deny"` — Claude Code blocks the command and shows the reason.
+- **Warn-level finding** → `permissionDecision: "ask"` — Claude Code prompts you to allow or deny.
+- **Clean command** → exit 0 with no output — the command proceeds through Claude Code's normal permission flow.
+- **Fail-closed** — a detected install that cannot be verified (shell expansion, VCS URL, remote requirements file, `gem`/`go`, untrusted conda channel, or a scanner error) is **denied**.
+
+The hook covers all 15 package managers the shared registry understands (pip/pip3, `python -m pip`, uv, pipx, poetry, conda, npm/yarn/pnpm/bun, cargo, …) and scans packages referenced via `pip install -r requirements.txt`. The MCP server (`agentshield serve --mcp`) remains available and can be used alongside or instead of the hook.
+
+---
+
+### Framework: OpenAI Codex CLI
+
+Codex CLI gained an experimental hooks system (`~/.codex/hooks.json`) whose `PreToolUse` contract matches Claude Code's, so the **same** `agentshield hook` command works — pass `--agent codex` so warn-level findings fail closed (Codex parses but does not yet honor `permissionDecision: "ask"`, which would otherwise fail open).
+
+Enable the feature flag in `~/.codex/config.toml`:
+
+```toml
+[features]
+codex_hooks = true
+```
+
+Then add to `~/.codex/hooks.json` (or `<repo>/.codex/hooks.json`):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "agentshield hook --agent codex" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Caveats (honest scope).** Codex hooks are experimental and Windows is unsupported. Codex's `PreToolUse` only intercepts "simple" Bash tool calls — a model can still bypass it by writing a script to disk and running that — so treat this as a useful guardrail, not a hard enforcement boundary. For stronger enforcement, combine it with the PATH shim / `execve` interceptor / index proxy, or the MCP server.
 
 ---
 

@@ -762,19 +762,43 @@ echo '{"jsonrpc":"2.0","method":"scan","params":{"package":"requests","ecosystem
 
 ---
 
-### Claude Code hooks
+### Claude Code / Codex hooks
 
-Claude Code's `PreToolUse` hook can invoke `agentshield hook` to intercept Bash commands. The hook connects to the `agentshield serve` daemon for < 5 ms latency per check, avoiding Python startup cost.
+Claude Code's (and OpenAI Codex's) `PreToolUse` hook invokes `agentshield hook` to intercept `Bash` commands before they run. The hook reads the agent's PreToolUse payload as JSON on **stdin**, scans every package install in the command through the shared scan core, and replies with the agent's `permissionDecision` contract on stdout.
 
-```bash
-# .claude/settings.json
+```jsonc
+// .claude/settings.json (Claude Code)
 {
   "hooks": {
-    "PreToolUse": "agentshield hook --tool $TOOL_NAME --input '$TOOL_INPUT'"
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "agentshield hook" }
+        ]
+      }
+    ]
   }
 }
-# exit 0 = allow, exit 1 = block (reason on stderr)
 ```
+
+```jsonc
+// ~/.codex/hooks.json (Codex — needs `codex_hooks = true` under [features] in config.toml)
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "agentshield hook --agent codex" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Decision mapping: BLOCK → `permissionDecision: "deny"`; warn → `"ask"` on Claude Code (the user is prompted) / `"deny"` on Codex (which does not yet honor `"ask"`, so it fails closed); clean → exit 0 with no output (the command proceeds). Anything that can't be verified (shell expansion, VCS URLs, remote requirements files, `gem`/`go`, untrusted conda channels, scanner errors) fails closed and is denied. See [AGENT_SETUP.md](AGENT_SETUP.md) for the full setup and the Codex enforcement-scope caveats.
 
 ---
 
@@ -1410,17 +1434,19 @@ It covers:
   `command X` invocations.
 - conda trusted vs. untrusted channels.
 - General fail-closed behaviour (unverifiable managers, unanalyzable arguments).
+- The **Claude Code / Codex `PreToolUse` hook** (`agentshield hook`) — bad → `deny`,
+  good → allow, fail-closed on unverifiable/unanalyzable input, and a malformed
+  payload that must not block.
 - The **PATH-shim** baseline, the **`LD_PRELOAD` execve** interceptor, and the
   **index proxy** (env injection, block/allow, and transitive-dependency blocking).
 - The posture scan.
 
-These are exactly the framework-agnostic enforcement layers plus the two
-first-party plugin integrations (Hermes, OpenClaw). There is intentionally no
-Claude Code / Codex / Cursor-specific path in the harness, because as of 0.9.0
-those have no in-band integration — they are covered by the agnostic layers
-(shim, `LD_PRELOAD`, index proxy, `guard-scan-cmd`, MCP server) instead. (The
-`agentshield.integrations.claude_code` module is a placeholder that raises
-`NotImplementedError`.)
+These are the framework-agnostic enforcement layers, the two first-party plugin
+integrations (Hermes, OpenClaw), and the in-band **Claude Code / Codex
+`PreToolUse` hook** (`agentshield hook`, implemented in
+`agentshield.integrations.claude_code`). Cursor and other agents without an
+in-band hook are still covered by the agnostic layers (shim, `LD_PRELOAD`, index
+proxy, `guard-scan-cmd`, MCP server).
 
 The harness is deterministic: it runs with `AGENTSHIELD_OFFLINE=1`, unsets
 `AGENTSHIELD_SESSION_ID` so the per-session scan rate limiter can't accumulate

@@ -246,6 +246,29 @@ classify_marker() {  # ALLOW if the fake downstream binary actually ran
     if printf '%s' "$1" | grep -q "$MARKER"; then echo ALLOW; else echo BLOCK; fi
 }
 
+# agentshield hook (Claude Code / Codex PreToolUse): reads a PreToolUse payload
+# on stdin and emits permissionDecision JSON on stdout. BLOCK -> "deny"; the
+# Claude Code warn path -> "ask"; ALLOW -> empty stdout (exit 0). We classify by
+# the rendered decision. First arg may be "--agent codex" (passed straight on);
+# the remaining args are the command the agent is "about to run".
+hook_obs() {
+    agent_opt=""
+    case "$1" in
+        --agent) agent_opt="--agent $2"; shift 2 ;;
+    esac
+    cmd="$*"
+    payload=$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"%s"}}' "$cmd")
+    # shellcheck disable=SC2086
+    out=$(printf '%s' "$payload" | agentshield hook $agent_opt 2>/dev/null)
+    if printf '%s' "$out" | grep -q '"permissionDecision": "deny"'; then
+        echo BLOCK
+    elif printf '%s' "$out" | grep -q '"permissionDecision": "ask"'; then
+        echo WARN
+    else
+        echo ALLOW
+    fi
+}
+
 # ----------------------------------------------------------------------------
 # 0. Preconditions
 # ----------------------------------------------------------------------------
@@ -444,6 +467,30 @@ head2 "6. general fail-closed"
 grade "fail-closed shell-expansion"  BLOCK "$(guard_obs pip install \$PKG)"                  "pip install \$PKG"
 grade "fail-closed VCS url"          BLOCK "$(guard_obs pip install git+https://x/y.git)"    "pip install git+https://x/y.git"
 grade "fail-closed remote -r file"   BLOCK "$(guard_obs pip install -r https://x/req.txt)"   "pip install -r https://x/req.txt"
+
+# ============================================================================
+# 6b. Claude Code / Codex PreToolUse hook (agentshield hook)
+# ============================================================================
+head2 "6b. Claude Code / Codex PreToolUse hook"
+# Claude Code dialect (default): BAD -> deny(BLOCK), GOOD -> empty(ALLOW)
+grade "hook pip BAD"            BLOCK "$(hook_obs pip install $BAD)"          "hook: pip install \$BAD"
+grade "hook pip GOOD"          ALLOW "$(hook_obs pip install $GOOD_PYPI)"    "hook: pip install $GOOD_PYPI"
+grade "hook npm BAD"           BLOCK "$(hook_obs npm install $BAD)"          "hook: npm install \$BAD"
+grade "hook cargo GOOD"        ALLOW "$(hook_obs cargo install $GOOD_CARGO)" "hook: cargo install $GOOD_CARGO"
+grade "hook no-install"        ALLOW "$(hook_obs ls -la /tmp)"              "hook: ls -la /tmp"
+# fail-closed: unverifiable manager + unanalyzable arg must deny(BLOCK)
+grade "hook gem (unverifiable)" BLOCK "$(hook_obs gem install foo)"          "hook: gem install foo"
+grade "hook shell-expansion"   BLOCK "$(hook_obs pip install \$PKG)"         "hook: pip install \$PKG"
+# Codex dialect: same deny on BAD (codex_hooks accepts the same shape)
+grade "hook codex pip BAD"     BLOCK "$(hook_obs --agent codex pip install $BAD)" "hook --agent codex: pip install \$BAD"
+grade "hook codex GOOD"        ALLOW "$(hook_obs --agent codex pip install $GOOD_PYPI)" "hook --agent codex: pip install $GOOD_PYPI"
+# malformed payload must NOT block (fail-closed applies to detected installs only)
+mal=$(printf 'not valid json' | agentshield hook 2>/dev/null)
+if printf '%s' "$mal" | grep -q 'permissionDecision'; then
+    grade "hook malformed payload" ALLOW BLOCK "hook: <malformed stdin>"
+else
+    grade "hook malformed payload" ALLOW ALLOW "hook: <malformed stdin>"
+fi
 
 # ============================================================================
 # 7. PATH shim baseline

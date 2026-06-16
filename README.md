@@ -55,6 +55,7 @@ AgentShield sits between the agent's intent ("install X") and the system executi
 - [agentshield guard](#agentshield-guard)
 - [Offline mode](#offline-mode)
 - [Caching](#caching)
+- [Testing](#testing)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -1384,24 +1385,158 @@ pip install --force-reinstall agentshield
 
 ---
 
+## Testing
+
+AgentShield has two complementary test surfaces: the Python test suite (unit /
+integration / e2e, run with `pytest`) and a **container enforcement harness** that
+drives every runtime enforcement layer end-to-end inside a real container or VM.
+
+For the Python suite, see [Contributing](#contributing) below. This section
+covers the container harness, which lives in
+[`scripts/`](scripts/README.md) — that directory's README is the authoritative,
+detailed reference; the summary here is the canonical flow.
+
+### What the harness covers
+
+`scripts/container_e2e_test.sh` is a self-contained, self-grading POSIX-sh
+(BusyBox/ash-safe) script. It exercises each enforcement surface with a
+**known-bad sentinel** package (must `BLOCK`) and a **known-good** package
+(`requests` / `lodash` / `serde`, must `ALLOW`), grading every case `PASS`/`FAIL`.
+It covers:
+
+- The **Hermes plugin** and **OpenClaw skill** interceptors (all shell tool names,
+  structured install tools, self-verify-registered, and fail-closed paths).
+- `guard-scan-cmd` across every supported package manager, plus absolute-path and
+  `command X` invocations.
+- conda trusted vs. untrusted channels.
+- General fail-closed behaviour (unverifiable managers, unanalyzable arguments).
+- The **PATH-shim** baseline, the **`LD_PRELOAD` execve** interceptor, and the
+  **index proxy** (env injection, block/allow, and transitive-dependency blocking).
+- The posture scan.
+
+These are exactly the framework-agnostic enforcement layers plus the two
+first-party plugin integrations (Hermes, OpenClaw). There is intentionally no
+Claude Code / Codex / Cursor-specific path in the harness, because as of 0.9.0
+those have no in-band integration — they are covered by the agnostic layers
+(shim, `LD_PRELOAD`, index proxy, `guard-scan-cmd`, MCP server) instead. (The
+`agentshield.integrations.claude_code` module is a placeholder that raises
+`NotImplementedError`.)
+
+The harness is deterministic: it runs with `AGENTSHIELD_OFFLINE=1`, unsets
+`AGENTSHIELD_SESSION_ID` so the per-session scan rate limiter can't accumulate
+across its many CLI invocations, and temporarily backs up + restores any warmed
+offline CVE/malicious rows for the known-good packages (reverted on exit via a
+trap) so the ALLOW path doesn't depend on DB state.
+
+### Canonical flow
+
+Provision a clean container or VM (the reference target is `alpine/arm64` via the
+macOS `container` CLI, but the scripts are distro-aware and portable), then:
+
+```sh
+# 1. Install all the toolchain/runtimes the harness needs (run as root or with sudo).
+sh scripts/container_install_deps.sh
+
+# 2. Install AgentShield into the container — from your repo build for the
+#    version under test. On an externally-managed Python (PEP 668: Debian/Ubuntu/
+#    Alpine system interpreters), pip refuses a global install unless you opt in:
+pip install --break-system-packages .       # or: python -m pip install . in a venv
+
+# 3. Run the harness.
+sh scripts/container_e2e_test.sh
+```
+
+From the host you can pipe the scripts in instead of copying them:
+
+```sh
+container exec <container-id> sh < scripts/container_install_deps.sh
+container exec <container-id> sh < scripts/container_e2e_test.sh
+```
+
+`container_install_deps.sh` detects the package manager
+(`apk` / `apt-get` / `dnf` / `yum` / `pacman` / `zypper`) and installs the C
+toolchain, `bash`, `python3`+`pip`, `node`+`npm`, `ruby`, and `go` from the
+distro, then `rust`/`cargo`, `uv`, `yarn`, `pnpm`, `pipx`, `poetry`, `bun`, and
+`micromamba` via their official installers. It is idempotent, prints an
+`installed / skipped / failed` summary, and exits non-zero if a **hard**
+requirement (C compiler, `bash`, `python3`) is missing. On **musl** (Alpine),
+`bun` and `micromamba`/conda are glibc-only and are skipped with a clear note —
+install `gcompat` or use a glibc base image if you need them.
+
+The harness auto-detects a mounted repo (via `$AGENTSHIELD_REPO` or common paths
+like `/work/AgentShield`) and prints its commit; if present it also attempts a
+best-effort reinstall, but that step does not pass `--break-system-packages`, so
+on PEP-668 systems you should install AgentShield yourself as in step 2 above and
+the harness will simply test the build it finds on `PATH`.
+
+### What a passing run looks like
+
+Per-feature `PASS`/`FAIL`/`SKIP` lines, a final `RESULT TABLE`, then a summary:
+
+```
+SUMMARY: N/N passed, K skipped — ALL GRADED CHECKS PASSED.
+```
+
+Exit code is `0` only when there are no failures. `SKIP`s are environment-gated:
+a missing C compiler skips the `LD_PRELOAD` build, a missing `bash` skips the
+PATH-shim functional cases, and no network skips the proxy transitive-dependency
+resolution. Run `container_install_deps.sh` first to eliminate the
+toolchain-related skips. Before submitting any change to an enforcement layer,
+run this harness against a container and confirm a clean run.
+
+---
+
 ## Contributing
+
+### Dev environment
+
+AgentShield targets **Python 3.11+** (CI runs 3.11 / 3.12 / 3.13). Set up an
+editable install with the dev extras:
 
 ```bash
 git clone https://github.com/mkarvan/AgentShield
-cd agentshield
+cd AgentShield
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,static-analysis]"
-
-# Run unit tests (no network required)
-pytest tests/unit/
-
-# Run integration tests (requires API keys)
-NVD_API_KEY=... GITHUB_TOKEN=ghp_... pytest tests/integration/
-
-# Lint and type-check
-ruff check src/
-mypy src/agentshield/
+pip install -e ".[dev]"
+# add static-analysis if you'll work on the --deep code paths:
+# pip install -e ".[dev,static-analysis]"
 ```
+
+### Local CI checks
+
+These mirror `.github/workflows/ci.yml` exactly. **All of them are expected to
+pass locally before you push** (the same jobs gate `main` and every PR):
+
+```bash
+# Lint & type-check (the "lint" job)
+ruff check src/ tests/
+ruff format --check src/ tests/
+mypy src/agentshield            # mypy runs in --strict mode (see pyproject.toml)
+
+# Unit tests with coverage (the "test" job; coverage must stay ≥ 60%)
+pytest tests/unit/ -v --cov=agentshield --cov-report=term-missing \
+    --cov-fail-under=60 -m "not integration"
+```
+
+The CI lint job also installs `types-toml` alongside the dev extras. Ruff is
+configured with `line-length = 100`, `target-version = py311`, and the
+`E, F, I, UP, B, SIM` rule sets (see `[tool.ruff]` in `pyproject.toml`).
+
+Integration tests hit real advisory APIs (OSV / NVD / GitHub Advisory) and only
+run in CI on pushes to `main`; run them locally with API keys when touching the
+online scanning paths:
+
+```bash
+NVD_API_KEY=... GITHUB_TOKEN=ghp_... pytest tests/integration/ -v -m integration
+```
+
+### Changes to enforcement layers
+
+If your change touches a runtime enforcement surface (the Hermes/OpenClaw
+plugins, `guard-scan-cmd`, the PATH shim, the `LD_PRELOAD` execve interceptor, or
+the index proxy), also run the container harness described in
+[Testing](#testing) against a provisioned container and confirm a clean
+`ALL GRADED CHECKS PASSED` run before submitting.
 
 ### Test structure
 

@@ -335,7 +335,25 @@ github_token = ""    # Required for GitHub Advisory Database (GraphQL)
 [cache]
 db_path   = "~/.agentshield/agentshield.db"
 ttl_hours = 24
+# Entries are evicted (LRU) once this many are cached, and each is re-fetched
+# after ttl_hours. Entries are small JSON blobs, so the default 50,000-entry
+# cap corresponds to roughly tens of MB of disk and working memory.
 max_entries = 50000
+
+# ── System packages (apt/yum/apk/brew/snap/…) ─────────────────────────────────
+[syspkg]
+enabled  = true        # Detect system installs + emit SP1.1 warning (never blocks)
+cve_scan = false       # OPT-IN live CVE scan of system packages (off by default)
+severity_floor = "HIGH"  # When cve_scan is on, ignore findings below this severity
+max_findings   = 50      # Cap findings shown; overflow summarised as "+N more"
+
+  # Only applies when cve_scan = true.
+  [syspkg.severity_policy]
+  critical = "block"
+  high     = "warn_confirm"
+  medium   = "async_report"
+  low      = "ignore"
+  info     = "ignore"
 
 # ── Reporting ─────────────────────────────────────────────────────────────────
 [reporting]
@@ -380,6 +398,36 @@ When a finding arrives, AgentShield looks up the response mode in this order (fi
 | `GITHUB_TOKEN` | env var or `[api]` | Enables GitHub Advisory Database. Any classic PAT with no scopes works. [github.com/settings/tokens](https://github.com/settings/tokens) |
 
 AgentShield works without either key — OSV has no rate limit and covers most PyPI/npm/Rust packages.
+
+### System package scanning (`[syspkg]`)
+
+AgentShield also notices when an agent shells out to a **system** package manager (`apt`/`apt-get`, `yum`/`dnf`, `apk`, `brew`, `snap`, `pacman`, `zypper`, `flatpak`, …). This is controlled by the `[syspkg]` section:
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `enabled` | `true` | Detect system installs and emit the lightweight `SP1.1` warning. Never blocks. |
+| `cve_scan` | `false` | **Opt-in.** When `true`, AgentShield runs a live CVE scan (OSV + distro trackers) of the detected packages and applies `severity_policy`. |
+| `severity_floor` | `"HIGH"` | When `cve_scan` is on, drop findings below this severity so noisy MEDIUM/LOW distro CVEs don't drown the signal. |
+| `max_findings` | `50` | Cap the findings surfaced; any overflow is summarised as `"+N more"`. |
+
+CVE scanning is **off by default on purpose**: distro packages ship with many low/medium CVEs, so scanning every `apt-get install curl` would block or nag on routine installs (and slow network paths such as `snap install` could time out). Detection-and-warn (`enabled = true`, `cve_scan = false`) is the default; turn `cve_scan` on deliberately when you want it. When on, the example policy below blocks CRITICAL and asks for confirmation on HIGH:
+
+```toml
+[syspkg]
+enabled  = true
+cve_scan = true
+severity_floor = "HIGH"
+max_findings   = 50
+
+  [syspkg.severity_policy]
+  critical = "block"
+  high     = "warn_confirm"
+  medium   = "async_report"
+  low      = "ignore"
+  info     = "ignore"
+```
+
+Offline mode (`offline = true` at the **root** of the config, or `AGENTSHIELD_OFFLINE=1`) skips the CVE scan entirely even when `cve_scan = true`.
 
 ---
 
@@ -1125,6 +1173,8 @@ jobs:
 ```
 
 **Inputs:** `manifests` (glob pattern), `check-licenses` (bool), `fail-on` (severity threshold), `deep` (bool), `transitive` (bool), `github-token`, `version` (AgentShield version to install, default `0.7.0`).
+
+> **Not on PyPI yet.** AgentShield is not published to PyPI or the GitHub Actions Marketplace. The action installs from source (`pip install "git+https://github.com/mkarvan/AgentShield.git@v<version>"`) and is referenced by local path (`./.github/action/agentshield-action`), so `version` must be a valid Git tag. Likewise, install the CLI with `pip install git+https://github.com/mkarvan/AgentShield.git` — a bare `pip install agentshield` will not resolve until a PyPI release is published.
 
 **Outputs:** `blocked`, `warned`, `total`, `report` (markdown text).
 

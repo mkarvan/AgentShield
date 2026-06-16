@@ -56,9 +56,37 @@ packages = []
 
 [cache]
 ttl_hours  = 24
+# Max cached entries before LRU eviction. Each entry is a small JSON blob, so
+# the default 50k cap corresponds to roughly tens of MB of disk/working memory.
 max_entries = 50000
 # db_path defaults to ~/.agentshield/agentshield.db
 
 [reporting]
 auto_report_on_exit = true
 # report_dir defaults to ~/.agentshield/reports/
+
+[syspkg]
+# System package-manager handling (apt/apt-get, yum/dnf, apk, brew, snap, …).
+#
+# enabled  — detect system installs and emit the lightweight SP1.1 warning.
+#            On by default; this never blocks.
+# cve_scan — OPT-IN live CVE scan (OSV + distro trackers) of detected system
+#            packages. Off by default: when on it makes network calls and can
+#            block everyday installs (e.g. `apt-get install curl`) on the many
+#            CVEs that ship with distro packages. Turn it on deliberately.
+enabled  = true
+cve_scan = false
+# When cve_scan is on, only surface findings at or above this severity, so that
+# noisy MEDIUM/LOW distro CVEs don't drown out what matters. One of:
+# CRITICAL | HIGH | MEDIUM | LOW | INFO.
+severity_floor = "HIGH"
+# Cap the number of findings shown; any overflow is summarised as "+N more".
+max_findings = 50
+
+  # How each surfaced severity is handled (only applies when cve_scan = true).
+  [syspkg.severity_policy]
+  critical = "block"
+  high     = "warn_confirm"
+  medium   = "async_report"
+  low      = "ignore"
+  info     = "ignore"

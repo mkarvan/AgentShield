@@ -132,6 +132,24 @@ github_token = ""
 [cache]
 db_path   = "~/.agentshield/agentshield.db"
 ttl_hours = 24
+# max_entries defaults to 50,000 (LRU eviction). Entries are small JSON blobs,
+# so this is roughly tens of MB of disk/working memory.
+max_entries = 50000
+
+[syspkg]
+# System package managers (apt/yum/apk/brew/snap/…).
+enabled  = true        # detect + emit SP1.1 warning (never blocks)
+cve_scan = false       # OPT-IN live CVE scan of system packages (off by default)
+severity_floor = "HIGH"  # when cve_scan is on, ignore findings below this severity
+max_findings   = 50      # cap findings shown; overflow summarised as "+N more"
+
+  # Only applies when cve_scan = true.
+  [syspkg.severity_policy]
+  critical = "block"
+  high     = "warn_confirm"
+  medium   = "async_report"
+  low      = "ignore"
+  info     = "ignore"
 
 [reporting]
 report_dir          = "~/.agentshield/reports/"
@@ -141,6 +159,8 @@ auto_report_on_exit = true
 max_packages_per_hour    = 20    # block if agent installs > 20 packages/hour
 max_wheel_mb_per_session = 500   # block if total wheel downloads exceed 500 MB
 ```
+
+> **System package CVE scanning is opt-in.** `[syspkg].enabled` only detects system installs and prints an `SP1.1` warning. Set `cve_scan = true` to additionally run a live CVE scan (OSV + distro trackers) and apply `severity_policy`. It is off by default because distro packages carry many low/medium CVEs that would otherwise block or nag on routine installs like `apt-get install curl`, and slow paths such as `snap install` could time out. Offline mode (root-level `offline = true`) skips the scan even when `cve_scan = true`.
 
 **Verify the config loads without errors:**
 ```bash
@@ -468,6 +488,8 @@ The hook covers all 15 package managers the shared registry understands (pip/pip
 ### Framework: OpenAI Codex CLI
 
 Codex CLI gained an experimental hooks system (`~/.codex/hooks.json`) whose `PreToolUse` contract matches Claude Code's, so the **same** `agentshield hook` command works — pass `--agent codex` so warn-level findings fail closed (Codex parses but does not yet honor `permissionDecision: "ask"`, which would otherwise fail open).
+
+> **Revisit:** the `ask → deny` mapping for Codex is a deliberate fail-closed workaround for Codex not honoring `"ask"` today. Re-evaluate it (and prefer mapping warn → `"ask"`, as with Claude Code) once a Codex release honors the `"ask"` decision.
 
 Enable the feature flag in `~/.codex/config.toml`:
 

@@ -40,9 +40,10 @@ dependencies = [
 hermes = [
     "hermes-agent>=0.1",  # pinned once stable API available
 ]
-openclaw = [
-    "openclaw>=0.1",      # pinned once stable API available
-]
+# NOTE: OpenClaw is a TypeScript/Node framework — its AgentShield integration is
+# a Node plugin under integrations/openclaw/ (installed via `openclaw plugins
+# install`), not a Python package. There is intentionally no `[openclaw]` Python
+# extra; the plugin shells out to the `agentshield` CLI for verdicts.
 static-analysis = [
     "bandit>=1.7",
     "semgrep>=1.70",

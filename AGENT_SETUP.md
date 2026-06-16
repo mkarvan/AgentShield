@@ -46,9 +46,11 @@ pip install "agentshield[static-analysis] @ git+https://github.com/mkarvan/Agent
 pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
-**With OpenClaw integration:**
+**For OpenClaw** (a TypeScript/Node framework): install the `agentshield` CLI
+here, then install the **Node plugin** in the OpenClaw box (see the OpenClaw
+section below) — there is no Python `[openclaw]` extra.
 ```bash
-pip install "agentshield[openclaw] @ git+https://github.com/mkarvan/AgentShield.git"
+pipx install "agentshield @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
 **With everything:**
@@ -331,35 +333,31 @@ Expected: AgentShield parses the bash command, detects `colouredlogs`, and block
 
 ### Framework: OpenClaw
 
-**Prerequisites:** `pip install "agentshield[openclaw] @ git+https://github.com/mkarvan/AgentShield.git"` (done in Step 1 if you chose `[openclaw]` or `[all]`).
+OpenClaw is a **TypeScript/Node** framework. AgentShield's OpenClaw integration is a **Node plugin** (`integrations/openclaw/`) that registers a `before_tool_call` hook on the `exec` tool and shells out to the `agentshield` CLI for verdicts. It is **not** a Python package — OpenClaw cannot load a Python class, which is why the old `module:`/`class:` "skill" registration never fired. Delete any such entry if you have one.
 
-Locate your OpenClaw configuration file (`openclaw_config.yaml`).
+**Prerequisites:**
+- The `agentshield` CLI on PATH in the OpenClaw box: `pipx install "agentshield @ git+https://github.com/mkarvan/AgentShield.git"` (or set `AGENTSHIELD_BIN` to its absolute path).
+- Node >= 22 (OpenClaw's requirement).
 
-Add AgentShieldSkill to the `skills` list:
-
-```yaml
-skills:
-  - module: agentshield.integrations.openclaw
-    class: AgentShieldSkill
-    triggers:
-      - action_type: pip_install
-      - action_type: npm_install
-      - action_type: cargo_add
-    config:
-      config_path: ~/.config/agentshield/config.toml
+**Install the plugin:**
+```bash
+openclaw plugins install @agentshield/openclaw-plugin
+# or from a checkout of this repo:
+openclaw plugins install ./integrations/openclaw
 ```
+OpenClaw discovers the plugin via its `openclaw.plugin.json` manifest and calls its `register(api)`, which wires `api.on("before_tool_call", …)`.
 
-**Restart the OpenClaw kernel** for the skill to register.
+**How interception works.** Before the `exec` tool runs, the hook reads `event.params.command`, passes it to `agentshield hook --agent openclaw`, and—if AgentShield blocks—returns `{ block: true, blockReason }` (terminal; `exec` never runs). `NEEDS_CONFIRMATION` fails closed to a block (OpenClaw hooks have no "ask"). The hook never throws; a missing/erroring scanner fails closed for install-looking commands and lets innocuous commands through.
 
-**Verify:**
-```python
-from agentshield.integrations.openclaw import AgentShieldSkill
-from agentshield.core.config import Config
-
-skill = AgentShieldSkill(config=Config.load())
-print("AgentShield OpenClaw skill loaded:", skill.name)
+**Verify (inside the OpenClaw box):**
+```bash
+# 1. plugin is loaded by OpenClaw's own loader
+openclaw plugins list | grep -i agentshield
+# 2. drive the real hook + real CLI and assert block-bad / allow-good
+./scripts/openclaw_realtest.sh
+# 3. plugin unit tests (pure decision logic)
+cd integrations/openclaw && node --test
 ```
-Expected: prints `AgentShield OpenClaw skill loaded: agentshield_check`
 
 ---
 
@@ -763,18 +761,14 @@ If OSV is unreachable, check your network. The OSV bulk export URL is `https://o
 
 ---
 
-### Hermes / OpenClaw plugin not intercepting installs
+### Hermes plugin not intercepting installs
 
 1. Verify the plugin imports **in the interpreter Hermes runs from** (e.g. `~/.hermes/venv/bin/python`, not your shell's `python3`):
    ```bash
    ~/.hermes/venv/bin/python -c "from agentshield.integrations.hermes import register; print('OK')"
    ```
-   or
-   ```bash
-   ~/.hermes/venv/bin/python -c "from agentshield.integrations.openclaw import AgentShieldSkill; print('OK')"
-   ```
 
-2. Check that `agentshield[hermes]` / `agentshield[openclaw]` was installed into that same interpreter (not just `agentshield`, and not into a different venv).
+2. Check that `agentshield[hermes]` was installed into that same interpreter (not just `agentshield`, and not into a different venv).
 
 3. Confirm the plugin is **enabled**: `agentshield` must appear under `plugins.enabled` in `~/.hermes/config.yaml`, and `/plugins` in a running session must list it. **Delete any old `module:`/`class:` plugin entry** (including ones embedded in skill files) — that form never wired the hook.
 
@@ -792,6 +786,16 @@ If OSV is unreachable, check your network. The OSV bulk export URL is `https://o
    If your agent uses a name not listed (e.g. `run_bash`), extend `_SHELL_TOOLS` in a small plugin wrapper as shown in the Hermes setup section.
 
 6. **Confirm the hook actually fires on a real install** (not just that the plugin loaded): ask Hermes to run `pip install colouredlogs` via the terminal and then check the log shows an AgentShield block line tied to that tool call. The bundled `scripts/hermes_realtest.sh` automates this inside the container.
+
+---
+
+### OpenClaw plugin not intercepting installs
+
+1. Confirm the `agentshield` CLI is on PATH **in the OpenClaw box** (the plugin shells out to it): `command -v agentshield`, or set `AGENTSHIELD_BIN` to its absolute path.
+2. Confirm OpenClaw loaded the plugin: `openclaw plugins list | grep -i agentshield`. If absent, `openclaw plugins install @agentshield/openclaw-plugin` (or `./integrations/openclaw`).
+3. Confirm the CLI verdict oracle works: `printf '{"tool_input":{"command":"pip install <known-bad>"}}' | agentshield hook --agent openclaw` should print `{"block": true, ...}`.
+4. Run the real-instance test: `./scripts/openclaw_realtest.sh` (drives the registered `before_tool_call` handler + the real CLI; FAILS if the hook never fires).
+5. Remember OpenClaw "skills" are prompt packs — interception is the **plugin** (`before_tool_call`), not a skill. Remove any old `module:`/`class:` skill entry.
 
 ---
 

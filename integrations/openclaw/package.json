@@ -1,0 +1,28 @@
+{
+  "name": "@agentshield/openclaw-plugin",
+  "version": "0.9.0",
+  "description": "AgentShield before_tool_call guard for OpenClaw — scans package installs before the exec tool runs them.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.mjs",
+    "./scan-command": "./scan-command.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "scan-command.mjs",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.mjs"
+    ]
+  }
+}

@@ -885,7 +885,7 @@ def hook(
         "claude-code",
         "--agent",
         "-a",
-        help="Requesting agent dialect: 'claude-code' (default) or 'codex'.",
+        help="Requesting agent dialect: 'claude-code' (default), 'codex', or 'openclaw'.",
     ),
     config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
 ) -> None:

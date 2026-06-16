@@ -215,8 +215,10 @@ pip install "agentshield[static-analysis] @ git+https://github.com/mkarvan/Agent
 # Hermes Agent integration
 pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
 
-# OpenClaw integration
-pip install "agentshield[openclaw] @ git+https://github.com/mkarvan/AgentShield.git"
+# OpenClaw integration is a Node plugin (OpenClaw is TypeScript), installed in
+# the OpenClaw box — not a Python extra:
+#   openclaw plugins install @agentshield/openclaw-plugin
+# (it shells out to the `agentshield` CLI, so install that too: pipx install agentshield)
 
 # Hermes + static analysis (the [all] bundle)
 pip install "agentshield[all] @ git+https://github.com/mkarvan/AgentShield.git"
@@ -606,39 +608,27 @@ The hook **never raises** (Hermes swallows hook exceptions and would then run th
 
 ---
 
-### OpenClaw — skill
+### OpenClaw — `before_tool_call` plugin (TypeScript)
 
-AgentShieldSkill is a pre-condition skill that the OpenClaw kernel calls before any triggered install action.
+OpenClaw is a **TypeScript/Node** framework, so AgentShield ships a **Node plugin** (under `integrations/openclaw/`), not a Python module. It registers a `before_tool_call` hook on the `exec` tool and blocks unsafe installs by returning OpenClaw's `{ block: true, blockReason }`. Verdicts come from the `agentshield` CLI (`agentshield hook --agent openclaw`) — the same shared scan core used by the Hermes and Claude Code / Codex integrations.
 
-**Install:**
+> OpenClaw "skills" are SKILL.md prompt packs, not executable gates, and OpenClaw cannot load a Python class. The earlier Python `AgentShieldSkill` (registered via `module:`/`class:`) was never invoked — it has been removed.
+
+**Install** (in the OpenClaw box; AgentShield CLI must also be installed, e.g. `pipx install agentshield`):
 ```bash
-pip install "agentshield[openclaw] @ git+https://github.com/mkarvan/AgentShield.git"
+openclaw plugins install @agentshield/openclaw-plugin
+# or, from a checkout: openclaw plugins install ./integrations/openclaw
 ```
 
-**Register in `openclaw_config.yaml`:**
-```yaml
-skills:
-  - module: agentshield.integrations.openclaw
-    class: AgentShieldSkill
-    triggers:
-      - action_type: pip_install
-      - action_type: npm_install
-      - action_type: cargo_add
-    config:
-      config_path: ~/.config/agentshield/config.toml
-```
+**Hook contract** (`before_tool_call`, `block: true` is terminal):
 
-**SkillResult fields:**
-```python
-SkillResult(
-    allowed=True | False,   # False → OpenClaw blocks the action
-    decision="ALLOW|...",   # DecisionAction string
-    findings=[...],         # list[dict] — Finding.model_dump() for each finding
-    message="reason",       # human-readable explanation
-)
-```
+| AgentShield decision | OpenClaw hook return |
+|---------------------|----------------------|
+| `ALLOW` / `LOG_ASYNC` | `undefined` (no decision) — the tool call proceeds |
+| `NEEDS_CONFIRMATION` | `{ block: true, blockReason }` — fail-closed (the hook has no "ask" path) |
+| `BLOCK` | `{ block: true, blockReason }` — the `exec` call is vetoed |
 
-`LOG_ASYNC` → `allowed=True` (install proceeds, findings logged for posture report).
+The hook **never throws** (a thrown hook would let the tool run); a missing/erroring scanner fails closed for install-looking commands and otherwise lets innocuous commands through. Verify with `scripts/openclaw_realtest.sh` inside the OpenClaw box.
 
 ---
 
@@ -1421,7 +1411,7 @@ detailed reference; the summary here is the canonical flow.
 (`requests` / `lodash` / `serde`, must `ALLOW`), grading every case `PASS`/`FAIL`.
 It covers:
 
-- The **Hermes plugin** and **OpenClaw skill** interceptors (all shell tool names,
+- The **Hermes plugin** interceptor (all shell tool names,
   structured install tools, self-verify-registered, and fail-closed paths).
 - `guard-scan-cmd` across every supported package manager, plus absolute-path and
   `command X` invocations.
@@ -1435,7 +1425,7 @@ It covers:
 - The posture scan.
 
 These are the framework-agnostic enforcement layers, the two first-party plugin
-integrations (Hermes, OpenClaw), and the in-band **Claude Code / Codex
+integrations (Hermes plugin + OpenClaw Node plugin), and the in-band **Claude Code / Codex
 `PreToolUse` hook** (`agentshield hook`, implemented in
 `agentshield.integrations.claude_code`). Cursor and other agents without an
 in-band hook are still covered by the agnostic layers (shim, `LD_PRELOAD`, index
@@ -1563,7 +1553,7 @@ NVD_API_KEY=... GITHUB_TOKEN=ghp_... pytest tests/integration/ -v -m integration
 
 ### Changes to enforcement layers
 
-If your change touches a runtime enforcement surface (the Hermes/OpenClaw
+If your change touches a runtime enforcement surface (the Hermes plugin / OpenClaw Node plugin
 plugins, the Claude Code / Codex `agentshield hook`, `guard-scan-cmd`, the PATH
 shim, the `LD_PRELOAD` execve interceptor, or the index proxy), also run the
 container harness described in [Testing](#testing) against a provisioned

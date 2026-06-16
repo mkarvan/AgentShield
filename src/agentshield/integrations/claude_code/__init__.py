@@ -80,6 +80,7 @@ __all__ = [
     "AGENTS",
     "CLAUDE_CODE",
     "CODEX",
+    "OPENCLAW",
     "CommandDecision",
     "HookDecision",
     "HookResponse",
@@ -93,7 +94,8 @@ __all__ = [
 
 CLAUDE_CODE = "claude-code"
 CODEX = "codex"
-AGENTS = frozenset({CLAUDE_CODE, CODEX})
+OPENCLAW = "openclaw"
+AGENTS = frozenset({CLAUDE_CODE, CODEX, OPENCLAW})
 
 _HOOK_EVENT = "PreToolUse"
 
@@ -146,6 +148,20 @@ def render_response(decision: HookDecision, agent: str) -> HookResponse:
         # Exit 0 with no output: no decision to report; the agent proceeds
         # through its normal permission flow.
         return HookResponse()
+
+    # OpenClaw (TypeScript) dialect: the `before_tool_call` plugin hook expects
+    # `{ "block": true, "blockReason": "..." }` (block:true is terminal). It has
+    # no "ask" path, so — like Codex — a NEEDS_CONFIRMATION verdict fails closed
+    # to block. The OpenClaw plugin shells out to `agentshield hook --agent
+    # openclaw`, reads this JSON from stdout, and returns it from the hook.
+    if agent == OPENCLAW:
+        if decision.action == DecisionAction.BLOCK:
+            block_reason = "AgentShield blocked this command — " + "; ".join(decision.reasons)
+        else:  # NEEDS_CONFIRMATION → fail closed
+            block_reason = "AgentShield flagged this command for review — " + "; ".join(
+                decision.reasons
+            )
+        return HookResponse(stdout=json.dumps({"block": True, "blockReason": block_reason}))
 
     reason = "AgentShield blocked this command — " + "; ".join(decision.reasons)
 

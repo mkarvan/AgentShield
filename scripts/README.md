@@ -8,6 +8,31 @@ container (the reference target is `alpine/arm64` managed via the macOS
 | --- | --- |
 | `container_install_deps.sh` | Install every toolchain/runtime the harness needs so nothing is environment-skipped. |
 | `container_e2e_test.sh` | Self-grading end-to-end harness that drives every enforcement layer with a known-bad sentinel and a known-good package, and prints a PASS/FAIL table. |
+| `hermes_realtest.sh` | **Real-instance** test for a live Hermes box: loads the plugin through Hermes's own loader and drives its real `get_pre_tool_call_block_message` enforcement. FAILS if the `pre_tool_call` hook never fires. |
+| `openclaw_realtest.sh` | **Real-instance** test for a live OpenClaw box: drives the plugin's registered `before_tool_call` handler + the real `agentshield` CLI verdict oracle, blocking a bad `exec` install and allowing a good one. FAILS if the hook never fires. |
+
+## Real-instance tests (Hermes / OpenClaw)
+
+`container_e2e_test.sh` exercises AgentShield's own enforcement surfaces. The two
+`*_realtest.sh` scripts go further: they prove interception against the **real
+agent runtimes** — the exact failure we were chasing was a plugin that loaded but
+whose hook never fired, which only a real-runtime test catches.
+
+```sh
+# Hermes (run inside the Hermes box; install agentshield[hermes] + enable the
+# plugin in ~/.hermes/config.yaml first):
+HERMES_PY=~/.hermes/venv/bin/python ./scripts/hermes_realtest.sh
+
+# OpenClaw (TypeScript/Node; install the Node plugin + the agentshield CLI first):
+./scripts/openclaw_realtest.sh
+# OpenClaw plugin unit tests (pure decision logic, offline):
+cd integrations/openclaw && node --test
+```
+
+Both scripts write a deterministic AgentShield config (deny one sentinel, allow
+one), run their checks, restore the config, and print a `PASS`/`FAIL` summary
+(non-zero exit on any failure). Optional model-driven end-to-ends are gated
+behind `HERMES_LLM_E2E=1` / `OPENCLAW_LLM_E2E=1`.
 
 ## Validated end-to-end flow
 
@@ -128,8 +153,10 @@ What it does:
   ALLOW path is deterministic. All of this is reverted on exit (trap).
 - Runs every layer with bad-sentinel (expect **BLOCK**) and good-package (expect
   **ALLOW**) cases, self-grading each:
-  - openclaw skill + Hermes plugin interception (all shell tool names +
-    structured tools + self-verify-registered + fail-closed)
+  - Hermes plugin interception via the real `register(ctx)` + `pre_tool_call`
+    path (terminal/execute_code/shell tool names + structured tools +
+    self-verify-registered + fail-closed arg-key). (OpenClaw is a Node plugin —
+    see `openclaw_realtest.sh` / `integrations/openclaw`, not this harness.)
   - `guard-scan-cmd` across all 15 managers + absolute-path + `command X`
   - conda trusted vs untrusted channels
   - general fail-closed (unverifiable manager, unanalyzable args)

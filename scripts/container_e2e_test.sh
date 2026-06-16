@@ -3,7 +3,7 @@
 # AgentShield container end-to-end test harness
 # =============================================================================
 # Self-contained, self-grading POSIX-sh (BusyBox/ash safe) test harness meant to
-# be run INSIDE the alpine/arm64 container that has AgentShield + openclaw
+# be run INSIDE the alpine/arm64 container that has AgentShield
 # installed, e.g.:
 #
 #     container exec <container-id> sh < ~/Downloads/AgentShield/scripts/container_e2e_test.sh
@@ -337,9 +337,9 @@ printf '#!/bin/sh\necho "%s $0 $*"\n' "$MARKER" > "$FAKEBIN/pip"
 chmod +x "$FAKEBIN/pip"
 
 # ============================================================================
-# 3. openclaw / Hermes plugin interception
+# 3. Hermes plugin interception
 # ============================================================================
-head2 "3. openclaw + Hermes plugin interception"
+head2 "3. Hermes plugin interception"
 python3 - <<PYEOF > "$TMP/plugins.out" 2>&1
 import asyncio
 BAD="$BAD"; GOOD="$GOOD_PYPI"
@@ -388,24 +388,7 @@ async def hermes():
     print("HERMES_FAILCLOSED gem",       await shell("terminal", "gem install foo"))
     print("HERMES_FAILCLOSED expansion", await shell("terminal", "pip install \$PKG"))
 
-# ---- OpenClaw skill ----
-from agentshield.integrations.openclaw.skill import AgentShieldSkill
-try:
-    from openclaw.skills import SkillContext
-except ImportError:
-    from agentshield.integrations.openclaw._types import SkillContext
-s = AgentShieldSkill()
-async def oc(pkg, eco="pypi"):
-    r = await s.execute(SkillContext(params={"package": pkg, "ecosystem": eco}))
-    return "ALLOW" if r.allowed else "BLOCK"
-async def openclaw():
-    print("OPENCLAW_BAD pypi",  await oc(BAD))
-    print("OPENCLAW_GOOD pypi", await oc(GOOD))
-    print("OPENCLAW_BAD npm",   await oc(BAD, "npm"))
-    print("OPENCLAW_GOOD cargo",await oc("$GOOD_CARGO", "cargo"))
-
 asyncio.run(hermes())
-asyncio.run(openclaw())
 PYEOF
 
 # Grade plugin results from the captured output
@@ -423,10 +406,8 @@ grade "hermes structured npm BAD"  BLOCK "$(grep -m1 '^HERMES_STRUCT_BAD npm_ins
 grade "hermes structured cargo BAD" BLOCK "$(grep -m1 '^HERMES_STRUCT_BAD cargo_add ' "$TMP/plugins.out" | awk '{print $NF}')" "cargo_add package=\$BAD"
 grade "hermes fail-closed gem"       BLOCK "$(grep -m1 '^HERMES_FAILCLOSED gem ' "$TMP/plugins.out" | awk '{print $NF}')" "bash: gem install foo"
 grade "hermes fail-closed expansion" BLOCK "$(grep -m1 '^HERMES_FAILCLOSED expansion ' "$TMP/plugins.out" | awk '{print $NF}')" "bash: pip install \$PKG"
-grade "openclaw BAD pypi"   BLOCK "$(grep -m1 '^OPENCLAW_BAD pypi ' "$TMP/plugins.out" | awk '{print $NF}')" "skill.execute(pypi \$BAD)"
-grade "openclaw GOOD pypi"  ALLOW "$(grep -m1 '^OPENCLAW_GOOD pypi ' "$TMP/plugins.out" | awk '{print $NF}')" "skill.execute(pypi $GOOD_PYPI)"
-grade "openclaw BAD npm"    BLOCK "$(grep -m1 '^OPENCLAW_BAD npm ' "$TMP/plugins.out" | awk '{print $NF}')" "skill.execute(npm \$BAD)"
-grade "openclaw GOOD cargo" ALLOW "$(grep -m1 '^OPENCLAW_GOOD cargo ' "$TMP/plugins.out" | awk '{print $NF}')" "skill.execute(cargo $GOOD_CARGO)"
+# OpenClaw is a TypeScript/Node plugin — see integrations/openclaw (node --test)
+# and scripts/openclaw_realtest.sh; not exercised from this Python harness.
 
 # ============================================================================
 # 4. guard-scan-cmd across all 15 managers + absolute-path + `command`

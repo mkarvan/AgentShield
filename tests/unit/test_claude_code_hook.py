@@ -374,6 +374,60 @@ def test_render_block_is_deny():
     assert json.loads(resp.stdout)["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
 
 
+# ── OpenClaw dialect (the OpenClaw Node plugin shells out to this) ─────────────
+
+
+def test_render_openclaw_block_shape():
+    from agentshield.integrations.claude_code import OPENCLAW
+
+    resp = render_response(HookDecision(DecisionAction.BLOCK, ["evil-pkg: bad"]), OPENCLAW)
+    payload = json.loads(resp.stdout)
+    assert payload["block"] is True
+    assert "evil-pkg" in payload["blockReason"]
+    assert resp.exit_code == 0
+
+
+def test_render_openclaw_warn_fails_closed_to_block():
+    from agentshield.integrations.claude_code import OPENCLAW
+
+    resp = render_response(
+        HookDecision(DecisionAction.NEEDS_CONFIRMATION, ["sus: review"]), OPENCLAW
+    )
+    payload = json.loads(resp.stdout)
+    assert payload["block"] is True
+    assert "review" in payload["blockReason"].lower()
+
+
+def test_render_openclaw_allow_is_empty():
+    from agentshield.integrations.claude_code import OPENCLAW
+
+    assert render_response(HookDecision(DecisionAction.ALLOW), OPENCLAW) == HookResponse()
+
+
+def test_run_hook_openclaw_blocks_denylisted(tmp_path):
+    from agentshield.integrations.claude_code import OPENCLAW
+
+    cfg = Config.model_validate(
+        {"denylist": ["colouredlogs"], "cache": {"db_path": str(tmp_path / "h.db")}}
+    )
+    payload = json.dumps({"tool_input": {"command": "pip install colouredlogs"}})
+    resp = run_hook(payload, agent=OPENCLAW, config=cfg)
+    body = json.loads(resp.stdout)
+    assert body["block"] is True
+    assert "colouredlogs" in body["blockReason"].lower()
+
+
+def test_run_hook_openclaw_allows_clean(tmp_path):
+    from agentshield.integrations.claude_code import OPENCLAW
+
+    cfg = Config.model_validate(
+        {"allowlist": ["requests"], "cache": {"db_path": str(tmp_path / "h.db")}}
+    )
+    payload = json.dumps({"tool_input": {"command": "pip install requests"}})
+    resp = run_hook(payload, agent=OPENCLAW, config=cfg)
+    assert resp.stdout == ""
+
+
 # ── evaluate_command direct (ecosystem mapping) ───────────────────────────────
 
 

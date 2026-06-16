@@ -572,44 +572,37 @@ agentshield serve --socket /tmp/my.sock                  # custom IPC socket pat
 
 ## Framework integrations
 
-### Hermes Agent — tool plugin
+### Hermes Agent — `pre_tool_call` plugin
 
-AgentShield registers as a Hermes tool plugin and intercepts two categories of tool calls:
+AgentShield is a **real Hermes plugin**: a `register(ctx)` entry point that wires a `pre_tool_call` hook. The hook fires before every tool runs and scans installs that pass through:
 
-- **Structured install tools** (`pip_install`, `npm_install`, `cargo_add`) — package name/version read directly from the tool call arguments.
-- **Shell tools** (`bash`, `shell`, `run_command`, `execute`, `terminal`) — command string parsed for `pip install`, `pip3 install`, `python -m pip install`, `uv pip install`, `npm install`, `npm i`, `yarn add`, `cargo add`, and `cargo install` patterns.  Flags like `--break-system-packages`, `--user`, and `-U` are handled correctly; version specifiers and extras are stripped before scanning.
+- **Shell tools** (`terminal` — the real Hermes install path — plus `bash`, `shell`, `run_command`, `execute`, `sh`) — the `command` argument is parsed for `pip`/`pip3`/`python -m pip`/`uv pip`, `npm`/`npm i`/`yarn add`, and `cargo add`/`cargo install` patterns. Flags like `--break-system-packages`, `--user`, `-U` are handled; version specifiers and extras are stripped before scanning.
+- **`execute_code`** — the Python body is scanned heuristically, and any `terminal()` calls it makes re-enter the hook as real `terminal` calls.
 
-**Install:**
+> Hermes has no `before_tool_call`/`ToolPlugin` contract and no structured `pip_install` tool — earlier `module:`/`class:` registration never fired. If you have that anywhere (including in a skill file), remove it.
+
+**Install** (into the interpreter Hermes runs from, e.g. `~/.hermes/venv`):
 ```bash
 pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
-**Register in `hermes_config.yaml`:**
+**Register** — enable the pip entry-point in `~/.hermes/config.yaml`:
 ```yaml
 plugins:
-  - module: agentshield.integrations.hermes
-    class: AgentShieldPlugin
-    config:
-      config_path: ~/.config/agentshield/config.toml
+  enabled:
+    - agentshield
 ```
+…or drop in the bundled directory plugin: `cp -r examples/hermes-plugin ~/.hermes/plugins/agentshield` then enable it the same way. Restart Hermes and confirm with `/plugins` and the log line `AgentShield: registered 'pre_tool_call' guard`.
 
-**Or in Python:**
-```python
-from agentshield.integrations.hermes import AgentShieldPlugin
-from agentshield.core.config import Config
-
-plugin = AgentShieldPlugin(config=Config.load())
-# Register with Hermes runtime...
-```
-
-**Decision mapping:**
+**Decision mapping** (`pre_tool_call` supports allow-or-block only):
 
 | AgentShield decision | Hermes result |
 |---------------------|--------------|
-| `ALLOW` | Original `ToolCall` passed through unmodified |
-| `LOG_ASYNC` | Original `ToolCall` passed through; findings logged for posture report |
-| `NEEDS_CONFIRMATION` | `ToolResult.needs_confirmation(message, on_confirm=call)` — Hermes surfaces to user |
-| `BLOCK` | `ToolResult.error(reason)` — agent cannot proceed |
+| `ALLOW` / `LOG_ASYNC` | Hook returns `None` — the tool call proceeds |
+| `NEEDS_CONFIRMATION` | `{"action": "block", …}` with a "needs review" message — fail-closed (Hermes hooks can't prompt) |
+| `BLOCK` | `{"action": "block", "message": reason}` — agent cannot proceed |
+
+The hook **never raises** (Hermes swallows hook exceptions and would then run the tool); any internal error becomes a block. A startup self-verify logs loudly if the host lacks the `register_hook` API.
 
 ---
 

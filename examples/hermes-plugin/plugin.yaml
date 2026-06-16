@@ -1,0 +1,14 @@
+# AgentShield — Hermes plugin manifest.
+#
+# Install (directory plugin):
+#   1. pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
+#      (into the SAME interpreter Hermes runs from — e.g. ~/.hermes/venv)
+#   2. cp -r examples/hermes-plugin ~/.hermes/plugins/agentshield
+#   3. add `agentshield` to `plugins.enabled` in ~/.hermes/config.yaml
+#   4. restart Hermes; confirm with `/plugins`
+#
+# This manifest's __init__.py simply re-exports AgentShield's register(ctx),
+# which wires a `pre_tool_call` hook that scans installs before they run.
+name: agentshield
+version: "0.9.0"
+description: Scans package installs (pip/npm/cargo/...) before any terminal tool runs; blocks unsafe ones. Fail-closed.

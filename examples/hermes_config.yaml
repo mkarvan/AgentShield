@@ -1,23 +1,27 @@
-# Example Hermes Agent configuration with AgentShield plugin enabled
+# Example Hermes Agent configuration with AgentShield enabled.
+#
+# AgentShield is a real Hermes plugin: installing `agentshield[hermes]` exposes a
+# `hermes_agent.plugins` entry-point named `agentshield`, which wires a
+# `pre_tool_call` hook. Enable it via `plugins.enabled` below. (There is no
+# `module:`/`class:` plugin form in Hermes — that never fired.)
 
 agent:
   name: my-agent
   model: claude-sonnet-4-6
 
 plugins:
-  - module: agentshield.integrations.hermes
-    class: AgentShieldPlugin
-    config:
-      # Path to AgentShield config (default: ~/.config/agentshield/config.toml)
+  enabled:
+    - agentshield
+  # Optional: point the guard at a specific AgentShield config.
+  config:
+    agentshield:
       config_path: ~/.config/agentshield/config.toml
-      # Override response modes for this agent specifically
-      overrides:
-        critical: block
-        high: warn_confirm
 
+# The guard scans installs that run through the `terminal` tool (and
+# `execute_code`). No special tool list is required for interception, but these
+# are the tools a typical agent has enabled:
 tools:
-  - pip_install
-  - npm_install
-  - bash
+  - terminal
+  - execute_code
   - read_file
   - write_file

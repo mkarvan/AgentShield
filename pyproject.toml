@@ -63,6 +63,13 @@ dev = [
 [project.scripts]
 agentshield = "agentshield.cli:app"
 
+# Hermes (NousResearch hermes-agent) discovers pip-installed plugins via this
+# entry-point group. The target module exposes ``register(ctx)``, which wires the
+# ``pre_tool_call`` guard. Enable it with ``plugins.enabled: [agentshield]`` in
+# ``~/.hermes/config.yaml`` after installing ``agentshield[hermes]``.
+[project.entry-points."hermes_agent.plugins"]
+agentshield = "agentshield.integrations.hermes"
+
 [project.urls]
 Homepage = "https://github.com/mkarvan/AgentShield"
 Repository = "https://github.com/mkarvan/AgentShield"

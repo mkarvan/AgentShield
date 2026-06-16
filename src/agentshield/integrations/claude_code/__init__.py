@@ -66,15 +66,28 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from agentshield.core.config import Config
-from agentshield.core.models import DecisionAction, ScanRequest
+from agentshield.core.models import DecisionAction
 from agentshield.core.scanner import AgentShield
-from agentshield.enforce import registry
+from agentshield.enforce.command_scan import CommandDecision, evaluate_command
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "AGENTS",
+    "CLAUDE_CODE",
+    "CODEX",
+    "CommandDecision",
+    "HookDecision",
+    "HookResponse",
+    "evaluate_command",
+    "extract_command",
+    "render_response",
+    "run_hook",
+]
 
 # ── agent dialects ────────────────────────────────────────────────────────────
 
@@ -109,13 +122,10 @@ def extract_command(payload: dict[str, object]) -> str | None:
 
 # ── resolved outcomes ─────────────────────────────────────────────────────────
 
-
-@dataclass
-class HookDecision:
-    """The scan verdict for a command, before agent-specific rendering."""
-
-    action: DecisionAction
-    reasons: list[str] = field(default_factory=list)
+# ``HookDecision`` is the historical name for the shared command verdict; the
+# command-evaluation logic now lives in one place (``enforce.command_scan``) so
+# the Hermes plugin and this hook can never drift apart.
+HookDecision = CommandDecision
 
 
 @dataclass
@@ -125,84 +135,6 @@ class HookResponse:
     stdout: str = ""
     stderr: str = ""
     exit_code: int = 0
-
-
-# ── command evaluation (reuses the shared scan core) ──────────────────────────
-
-
-async def evaluate_command(
-    shield: AgentShield, command: str, *, source: str = CLAUDE_CODE
-) -> HookDecision:
-    """Scan every package-install detected in *command*.
-
-    Mirrors the Hermes shell handler and ``guard-scan-cmd`` exactly: pre-check
-    for unanalyzable args, parse installs via the registry, scan each verifiable
-    package, scan referenced requirements files, and fail closed on anything
-    that cannot be cleared.
-    """
-    # Patterns that cannot be statically analyzed (shell expansion, VCS URLs,
-    # remote requirements files) — fail closed before scanning anything.
-    manifest_paths, manifest_suspicions = registry.parse_manifests(command)
-    suspicions = registry.find_suspicions(command) + manifest_suspicions
-    if suspicions:
-        return HookDecision(
-            DecisionAction.BLOCK,
-            [f"cannot verify package source: {s}" for s in suspicions],
-        )
-
-    installs = registry.parse_command(command)
-    if not installs and not manifest_paths:
-        return HookDecision(DecisionAction.ALLOW, [])
-
-    blocked: list[str] = []
-    warned: list[str] = []
-
-    for inst in installs:
-        # Recognised but unverifiable manager (gem/go, untrusted conda channel) —
-        # no scan backend, so we cannot clear it. Fail closed.
-        if inst.ecosystem is None:
-            reason = (
-                inst.unverifiable_reason or f"'{inst.manager}' has no scan backend — cannot verify"
-            )
-            for pkg in inst.packages or ["<unspecified>"]:
-                blocked.append(f"{pkg}: {reason} (blocking to fail closed)")
-            continue
-
-        for pkg_name in inst.packages:
-            request = ScanRequest(package=pkg_name, ecosystem=inst.ecosystem, source=source)
-            try:
-                result = await shield.ascan(request)
-            except Exception as exc:  # noqa: BLE001 — fail closed on any scanner error
-                logger.warning("AgentShield scan error for %s: %s", pkg_name, exc)
-                blocked.append(f"{pkg_name}: scan failed ({exc}); blocking to fail closed")
-                continue
-            if result.decision.action == DecisionAction.BLOCK:
-                blocked.append(f"{pkg_name}: {result.decision.reason}")
-            elif result.decision.action == DecisionAction.NEEDS_CONFIRMATION:
-                warned.append(f"{pkg_name}: {result.decision.reason}")
-
-    # Scan packages declared in referenced requirements/constraint files.
-    for manifest in manifest_paths:
-        manifest_path = Path(manifest)
-        if not manifest_path.exists():
-            continue
-        try:
-            file_result = await shield.ascan_file(manifest_path)
-        except Exception as exc:  # noqa: BLE001 — fail closed
-            logger.warning("AgentShield scan error for manifest %s: %s", manifest, exc)
-            blocked.append(f"{manifest}: scan failed ({exc}); blocking to fail closed")
-            continue
-        action = file_result.aggregate_decision.action
-        if action == DecisionAction.BLOCK:
-            blocked.append(f"{manifest}: {file_result.aggregate_decision.reason}")
-        elif action == DecisionAction.NEEDS_CONFIRMATION:
-            warned.append(f"{manifest}: {file_result.aggregate_decision.reason}")
-
-    if blocked:
-        return HookDecision(DecisionAction.BLOCK, blocked)
-    if warned:
-        return HookDecision(DecisionAction.NEEDS_CONFIRMATION, warned)
-    return HookDecision(DecisionAction.ALLOW, [])
 
 
 # ── agent-specific rendering ──────────────────────────────────────────────────

@@ -237,51 +237,73 @@ Choose the section that matches your framework. If your framework is not listed,
 
 ### Framework: Hermes Agent
 
-**Prerequisites:** `pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"` (done in Step 1 if you chose `[hermes]` or `[all]`).
+**Prerequisites:** `pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"` — installed into **the same interpreter Hermes runs from** (e.g. `~/.hermes/venv`). This is the single most common mistake: installing into a different venv than Hermes uses means the plugin can't be imported.
 
-Locate your Hermes configuration file (typically `hermes_config.yaml` or `~/.hermes/config.yaml`).
+AgentShield is a **real Hermes plugin**: a `register(ctx)` entry point that wires a `pre_tool_call` hook. (Hermes has no `before_tool_call`/`ToolPlugin` contract and no structured `pip_install` tool — installs run through the `terminal` tool — so the old `module:`/`class:` registration never fired. If you have that in a config or skill file, delete it.)
 
-Add the AgentShield plugin to the `plugins` list:
+Register it one of two ways.
+
+**Option A — pip entry-point (recommended).** Installing `agentshield[hermes]` exposes a `hermes_agent.plugins` entry-point named `agentshield`. Just enable it in `~/.hermes/config.yaml`:
 
 ```yaml
 plugins:
-  - module: agentshield.integrations.hermes
-    class: AgentShieldPlugin
-    config:
+  enabled:
+    - agentshield
+```
+
+**Option B — drop-in plugin directory.** Copy the bundled plugin dir and enable it:
+
+```bash
+cp -r examples/hermes-plugin ~/.hermes/plugins/agentshield
+```
+```yaml
+# ~/.hermes/config.yaml
+plugins:
+  enabled:
+    - agentshield
+```
+
+(Optional) point the plugin at a specific AgentShield config:
+
+```yaml
+plugins:
+  enabled:
+    - agentshield
+  config:
+    agentshield:
       config_path: ~/.config/agentshield/config.toml
 ```
 
-**Restart the Hermes agent** for the plugin to take effect.
+**Restart Hermes.** Confirm it loaded with `/plugins` (you should see `agentshield`), and check the startup log for `AgentShield: registered 'pre_tool_call' guard (intercepting: …)`. If instead you see `this Hermes build exposes no 'register_hook' API`, the plugin self-verify is telling you in-band enforcement is inactive — fall back to `agentshield guard` (see below).
 
 #### How interception works
 
-AgentShieldPlugin intercepts two categories of tool calls:
+The `pre_tool_call` hook fires before **every** tool runs. AgentShield inspects:
 
-**1. Structured install tools** — `pip_install`, `npm_install`, `cargo_add`
+**Shell tools** — `terminal` (the real Hermes install path), plus `bash`, `shell`, `run_command`, `execute`, `sh` for Hermes forks. It reads the command from the tool's `command` argument and parses it for installs.
 
-The plugin reads the package name/version directly from the tool call arguments and scans it before the install proceeds.
+**Code tool** — `execute_code`: the Python body is scanned heuristically for install invocations, and any `terminal()` calls it makes re-enter the hook as real `terminal` tool calls (defense in depth).
 
-**2. Shell/bash tools** — `bash`, `shell`, `run_command`, `execute`, `terminal`
-
-Hermes sometimes uses raw bash commands instead of structured install tools (e.g. `pip install --break-system-packages requests`). The plugin automatically parses the command string for any of the following patterns and scans each detected package before allowing the command to run:
+It parses each of these command patterns and scans every detected package before the tool runs:
 
 | Command pattern | Ecosystem |
 |-----------------|-----------|
 | `pip install …`, `pip3 install …` | PyPI |
 | `python -m pip install …`, `uv pip install …` | PyPI |
-| `npm install …`, `npm i …` | npm |
-| `yarn add …` | npm |
+| `npm install …`, `npm i …`, `yarn add …` | npm |
 | `cargo add …`, `cargo install …` | Cargo |
 
-Flags like `--break-system-packages`, `--user`, and `-U` are correctly handled. Packages declared in a referenced requirements/constraint file (`-r requirements.txt`, `-c constraints.txt`) are resolved and scanned too; a remote reference such as `-r https://…/req.txt` is blocked because its contents cannot be verified statically. Version specifiers and extras (`requests[security]==2.28.0`) are stripped to extract the bare package name.
+Flags like `--break-system-packages`, `--user`, and `-U` are handled. Packages in a referenced requirements/constraint file (`-r requirements.txt`, `-c constraints.txt`) are resolved and scanned; a remote `-r https://…/req.txt` is blocked because its contents cannot be verified. Version specifiers and extras (`requests[security]==2.28.0`) are stripped to the bare name.
 
-If Hermes uses a different tool name for shell execution, add it to the `intercepts` list by subclassing:
+**Fail-closed semantics.** A `BLOCK` returns `{"action": "block", …}` and Hermes hands the reason back to the model. Because Hermes hooks support only allow-or-block (no "ask"), a `NEEDS_CONFIRMATION` verdict is **blocked** with a "needs review" message rather than allowed. Anything unverifiable — shell expansion (`pip install $PKG`), VCS URLs, remote requirements, gem/go, untrusted conda channels, a scanner error, or a `terminal` call whose command can't be read — is blocked, not allowed.
+
+If Hermes uses a different shell tool name, add it to `_SHELL_TOOLS`:
 
 ```python
-from agentshield.integrations.hermes.plugin import AgentShieldPlugin, _SHELL_TOOLS
-
-class MyAgentShieldPlugin(AgentShieldPlugin):
-    intercepts = [*AgentShieldPlugin.intercepts, "run_bash", "exec_cmd"]
+# in a tiny ~/.hermes/plugins/agentshield/__init__.py wrapper, before register:
+from agentshield.integrations.hermes import plugin as _p
+_p._SHELL_TOOLS = frozenset({*_p._SHELL_TOOLS, "run_bash", "exec_cmd"})
+from agentshield.integrations.hermes import register  # noqa: E402
 ```
 
 **Verify:**
@@ -743,26 +765,33 @@ If OSV is unreachable, check your network. The OSV bulk export URL is `https://o
 
 ### Hermes / OpenClaw plugin not intercepting installs
 
-1. Verify the module path is correct:
+1. Verify the plugin imports **in the interpreter Hermes runs from** (e.g. `~/.hermes/venv/bin/python`, not your shell's `python3`):
    ```bash
-   python3 -c "from agentshield.integrations.hermes import AgentShieldPlugin; print('OK')"
+   ~/.hermes/venv/bin/python -c "from agentshield.integrations.hermes import register; print('OK')"
    ```
    or
    ```bash
-   python3 -c "from agentshield.integrations.openclaw import AgentShieldSkill; print('OK')"
+   ~/.hermes/venv/bin/python -c "from agentshield.integrations.openclaw import AgentShieldSkill; print('OK')"
    ```
 
-2. Check that `agentshield[hermes]` / `agentshield[openclaw]` was installed (not just `agentshield`).
+2. Check that `agentshield[hermes]` / `agentshield[openclaw]` was installed into that same interpreter (not just `agentshield`, and not into a different venv).
 
-3. Ensure the Hermes/OpenClaw agent was **restarted** after editing the config file.
+3. Confirm the plugin is **enabled**: `agentshield` must appear under `plugins.enabled` in `~/.hermes/config.yaml`, and `/plugins` in a running session must list it. **Delete any old `module:`/`class:` plugin entry** (including ones embedded in skill files) — that form never wired the hook.
 
-4. **If Hermes runs install commands via a `bash` or `shell` tool** and the plugin still doesn't fire, confirm that the tool name used by Hermes appears in `AgentShieldPlugin.intercepts`:
+4. Check the startup log fired the self-verify line:
+   ```bash
+   grep -i "AgentShield: registered 'pre_tool_call'" ~/.hermes/logs/*.log
+   ```
+   If you see `this Hermes build exposes no 'register_hook' API` instead, in-band enforcement is inactive on this build — use the agnostic `agentshield guard` layer.
+
+5. **If Hermes runs installs via a differently-named shell tool**, confirm the tool name is covered:
    ```python
-   from agentshield.integrations.hermes import AgentShieldPlugin
-   print(AgentShieldPlugin.intercepts)
-   # ['bash', 'cargo_add', 'execute', 'npm_install', 'pip_install', 'run_command', 'shell', 'terminal']
+   from agentshield.integrations.hermes.plugin import intercepted_tools
+   print(intercepted_tools())
    ```
-   If your Hermes agent uses a different tool name (e.g. `run_bash`), subclass the plugin and add the name to `intercepts` as described in the setup section above.
+   If your agent uses a name not listed (e.g. `run_bash`), extend `_SHELL_TOOLS` in a small plugin wrapper as shown in the Hermes setup section.
+
+6. **Confirm the hook actually fires on a real install** (not just that the plugin loaded): ask Hermes to run `pip install colouredlogs` via the terminal and then check the log shows an AgentShield block line tied to that tool call. The bundled `scripts/hermes_realtest.sh` automates this inside the container.
 
 ---
 

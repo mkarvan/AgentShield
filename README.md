@@ -273,6 +273,19 @@ You can also set them in `~/.config/agentshield/config.toml` under `[api]`.
 
 AgentShield looks for config at `~/.config/agentshield/config.toml`. Create it to override defaults.
 
+> [!IMPORTANT]
+> **System-package CVE scanning is OFF by default (since v0.9.0).**
+> AgentShield still *detects* system installs (`apt`/`yum`/`apk`/`brew`/`snap`/…) and prints an `SP1.1` warning, but it does **not** run a live CVE scan of them unless you opt in. This is deliberate: distro packages ship with many low/medium CVEs, so scanning every `apt-get install curl` or `yum install httpd` would block or nag on routine installs (and slow paths like `snap install` could time out).
+>
+> To turn it on, add three lines to your config:
+>
+> ```toml
+> [syspkg]
+> cve_scan = true        # default: false
+> ```
+>
+> See [System package scanning (`[syspkg]`)](#system-package-scanning-syspkg) for the severity floor, findings cap, and recommended policy.
+
 ### Full config reference
 
 ```toml
@@ -1345,7 +1358,7 @@ The HTTP server uses Python's asyncio stdlib — no extra dependencies required.
 
 ## agentshield guard
 
-Start an interactive shell session where `pip`, `npm`, and `cargo` install commands are intercepted before execution. System package managers (`apt-get`, `yum`, `dnf`, `brew`, `apk`, `pacman`, `zypper`, `pkg`, `emerge`, `snap`, `flatpak`) are also monitored with CVE scanning — packages with critical vulnerabilities are blocked by default:
+Start an interactive shell session where `pip`, `npm`, and `cargo` install commands are intercepted before execution. System package managers (`apt-get`, `yum`, `dnf`, `brew`, `apk`, `pacman`, `zypper`, `pkg`, `emerge`, `snap`, `flatpak`) are also detected and flagged with an `SP1.1` warning. Live CVE scanning of those system packages is **opt-in** (`[syspkg].cve_scan`, off by default) — see the callout below:
 
 ```bash
 agentshield guard              # wraps $SHELL (bash, zsh, or fish)
@@ -1354,7 +1367,21 @@ agentshield guard --shell zsh  # wrap a specific shell
 
 Inside the guarded shell, the package manager commands are shadowed by wrapper functions. Any `pip install`, `npm install`, or `cargo add`/`cargo install` calls `agentshield guard-scan-cmd` first — if AgentShield blocks the package, the install is aborted and the error is printed before the command runs. Packages declared in a referenced requirements/constraint file (`pip install -r requirements.txt`) are resolved and scanned as well; a remote `-r <url>` is blocked because its contents cannot be verified.
 
-System package managers are also intercepted: `apt-get install`, `brew install`, `yum install`, `dnf install`, `apk add`, `pacman -S`, `zypper install`, `snap install`, `flatpak install`, `pkg install`, and `emerge` all trigger an SP1.1 warning and a CVE scan via OSV and distro-specific security trackers (Ubuntu CVE, Red Hat CVE, Homebrew audit). The severity policy is configurable — by default, critical CVEs block the install, high CVEs require confirmation, and medium CVEs are logged asynchronously. Configure via `[syspkg]` in `config.toml`.
+System package managers are also intercepted: `apt-get install`, `brew install`, `yum install`, `dnf install`, `apk add`, `pacman -S`, `zypper install`, `snap install`, `flatpak install`, `pkg install`, and `emerge` all trigger an `SP1.1` warning. They are **not** CVE-scanned unless you opt in.
+
+> [!NOTE]
+> **`syspkg.cve_scan` defaults to `false`.** Out of the box, system installs are detected and warned about (`SP1.1`) but not blocked — everyday installs proceed without a CVE scan. Set `cve_scan = true` under `[syspkg]` to additionally scan them via OSV and distro-specific trackers (Ubuntu CVE, Red Hat CVE, Homebrew audit). When enabled, the configurable severity policy applies — the recommended policy blocks critical CVEs, asks for confirmation on high, and logs medium asynchronously — filtered by `severity_floor` (default `HIGH`) and capped at `max_findings` (default `50`). See [System package scanning (`[syspkg]`)](#system-package-scanning-syspkg).
+>
+> ```toml
+> [syspkg]
+> cve_scan = true          # default: false — opt in to scan system packages
+> severity_floor = "HIGH"  # ignore MEDIUM/LOW distro CVEs
+> max_findings   = 50      # cap findings; overflow shown as "+N more"
+>
+>   [syspkg.severity_policy]
+>   critical = "block"
+>   high     = "warn_confirm"
+> ```
 
 ```
 [AgentShield Guard] Active — pip, npm, and cargo install commands are protected.

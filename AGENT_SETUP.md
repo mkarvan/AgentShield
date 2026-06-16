@@ -160,13 +160,60 @@ max_packages_per_hour    = 20    # block if agent installs > 20 packages/hour
 max_wheel_mb_per_session = 500   # block if total wheel downloads exceed 500 MB
 ```
 
-> **System package CVE scanning is opt-in.** `[syspkg].enabled` only detects system installs and prints an `SP1.1` warning. Set `cve_scan = true` to additionally run a live CVE scan (OSV + distro trackers) and apply `severity_policy`. It is off by default because distro packages carry many low/medium CVEs that would otherwise block or nag on routine installs like `apt-get install curl`, and slow paths such as `snap install` could time out. Offline mode (root-level `offline = true`) skips the scan even when `cve_scan = true`.
-
 **Verify the config loads without errors:**
 ```bash
 agentshield cache stats
 ```
 Expected output: lines showing cache entry counts (all zeros on first run). No error messages.
+
+---
+
+## Decision point — System-package CVE scanning (on or off?)
+
+This is the one setup choice that meaningfully changes day-to-day behavior, so decide it deliberately based on your environment. It is controlled by `syspkg.cve_scan`, which **defaults to OFF** in v0.9.0.
+
+What it does *not* affect: AgentShield always detects system package-manager commands (`apt`/`apt-get`, `yum`/`dnf`, `apk`, `brew`, `snap`, `pacman`, `zypper`, …) and prints an `SP1.1` warning. The toggle only controls whether those system packages are additionally **CVE-scanned** (via OSV + Ubuntu/Red Hat/Homebrew trackers) and run through the severity policy.
+
+**The tradeoff:**
+
+| | `cve_scan = false` (default) | `cve_scan = true` |
+|---|---|---|
+| System installs (`apt-get install curl`, `yum install httpd`, `apk add …`) | Detected + `SP1.1` warning, then proceed | Scanned for CVEs; can **block** or prompt |
+| Interruptions on routine installs | None | Expect blocks/prompts — distro packages carry many CVEs |
+| Network | No extra calls | Live calls per install (slow paths like `snap install` can be slow) |
+| Best for | Most agent setups; dev loops where system installs are common | Hardened/CI environments where stricter system-package gating is worth the noise |
+
+**Recommendation:** leave it **off** unless you specifically want system-package CVE gating. Detection + warning already gives you visibility without interrupting common installs. Turn it on in locked-down or compliance-sensitive environments.
+
+### Option A — Leave it off (default, recommended for most)
+
+Do nothing. You can be explicit if you like:
+
+```toml
+[syspkg]
+enabled  = true     # detect + SP1.1 warning (default)
+cve_scan = false    # no CVE scan of system packages (default)
+```
+
+### Option B — Turn it on (stricter)
+
+```toml
+[syspkg]
+enabled  = true
+cve_scan = true          # opt in to CVE-scan system packages
+severity_floor = "HIGH"  # ignore noisy MEDIUM/LOW distro CVEs (default HIGH)
+max_findings   = 50      # cap findings shown; overflow summarised as "+N more" (default 50)
+
+  # Recommended policy when scanning is on:
+  [syspkg.severity_policy]
+  critical = "block"          # block installs with a CRITICAL CVE
+  high     = "warn_confirm"   # prompt for confirmation on HIGH
+  medium   = "async_report"   # log only
+  low      = "ignore"
+  info     = "ignore"
+```
+
+Two knobs keep enabled scanning manageable: `severity_floor` (default `HIGH`) drops MEDIUM/LOW distro CVEs before they reach you, and `max_findings` (default `50`) caps how many are shown, summarising the rest as `"+N more"`. Note: offline mode (root-level `offline = true`, or `AGENTSHIELD_OFFLINE=1`) skips the scan entirely even when `cve_scan = true`.
 
 ---
 

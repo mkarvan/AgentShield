@@ -65,14 +65,20 @@ cve_scan = false
 
 @pytest.fixture
 def syspkg_config_offline(tmp_path: Path) -> Path:
-    """Config with offline mode — CVE scanning should be skipped."""
+    """Config with offline mode — CVE scanning should be skipped.
+
+    ``offline`` is a ROOT-level key on ``Config``, not part of ``[cache]``.
+    It must therefore appear before any table header in the TOML, otherwise
+    TOML scopes it under ``[cache]`` where it is silently ignored.
+    """
     cfg = tmp_path / "syspkg_offline.toml"
     db = tmp_path / "syspkg_offline.db"
     cfg.write_text(
         f"""\
+offline = true
+
 [cache]
 db_path = "{db}"
-offline = true
 
 [syspkg]
 enabled = true
@@ -89,6 +95,8 @@ class TestSysPkgCVEE2E:
     If network is unavailable, findings will be empty (graceful degradation).
     """
 
+    @pytest.mark.network
+    @pytest.mark.slow
     def test_apt_install_runs_cve_scan(self, syspkg_config: Path) -> None:
         """apt-get install should trigger CVE scan (exit 0 or 1 depending on vulns)."""
         result = _guard_cli("apt-get", "install", "curl", config=syspkg_config)
@@ -96,6 +104,8 @@ class TestSysPkgCVEE2E:
         # Should always show SP1.1 warning
         assert "SP1.1" in combined or "WARNING" in combined
 
+    @pytest.mark.network
+    @pytest.mark.slow
     def test_brew_install_runs_cve_scan(self, syspkg_config: Path) -> None:
         """brew install should trigger CVE scan."""
         result = _guard_cli("brew", "install", "jq", config=syspkg_config)
@@ -111,6 +121,13 @@ class TestSysPkgCVEE2E:
 
     def test_offline_mode_skips_cve_scan(self, syspkg_config_offline: Path) -> None:
         """Offline mode should skip CVE scanning entirely."""
+        # Regression: offline must be parsed as a ROOT-level Config field.
+        # Previously it was nested under [cache] and silently ignored, so the
+        # CVE scan still ran (and could block) despite offline = true.
+        from agentshield.core.config import Config
+
+        assert Config.load(syspkg_config_offline).offline is True
+
         result = _guard_cli("apt-get", "install", "curl", config=syspkg_config_offline)
         assert result.returncode == 0
 
@@ -121,6 +138,8 @@ class TestSysPkgCVEE2E:
         combined = result.stdout + result.stderr
         assert "SP1.1" not in combined
 
+    @pytest.mark.network
+    @pytest.mark.slow
     def test_yum_install_cve_scan(self, syspkg_config: Path) -> None:
         """yum install should trigger CVE scan."""
         result = _guard_cli("yum", "install", "httpd", config=syspkg_config)
@@ -133,6 +152,8 @@ class TestSysPkgCVEE2E:
         combined = result.stdout + result.stderr
         assert "SP1.1" in combined or "WARNING" in combined
 
+    @pytest.mark.network
+    @pytest.mark.slow
     def test_apk_add_cve_scan(self, syspkg_config: Path) -> None:
         """apk add should trigger CVE scan."""
         result = _guard_cli("apk", "add", "python3", config=syspkg_config)

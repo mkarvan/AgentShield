@@ -23,9 +23,17 @@ def _guard_cli(*args: str, config: Path | None = None) -> subprocess.CompletedPr
 
 @pytest.fixture
 def syspkg_config(tmp_path: Path) -> Path:
+    """Detection-only config: CVE scanning explicitly OFF.
+
+    These tests assert that system package-manager invocations are *detected*
+    and warned about (SP1.1) and never hard-block. CVE scanning is opt-in and
+    makes live network calls, so it is disabled here to keep the suite
+    deterministic and offline. CVE-scan behaviour is covered separately by the
+    @network @slow test below and by test_syspkg_cve_e2e.py.
+    """
     cfg = tmp_path / "syspkg_cfg.toml"
     db = tmp_path / "syspkg.db"
-    cfg.write_text(f'[cache]\ndb_path = "{db}"\n')
+    cfg.write_text(f'[cache]\ndb_path = "{db}"\n\n[syspkg]\nenabled = true\ncve_scan = false\n')
     return cfg
 
 
@@ -79,3 +87,32 @@ class TestSysPkgGuardScanCmd:
         assert result.returncode == 0
         combined = result.stdout + result.stderr
         assert "SP1.1" not in combined
+
+
+@pytest.mark.network
+@pytest.mark.slow
+def test_apt_install_with_cve_scan_enabled_produces_findings(tmp_path: Path) -> None:
+    """With cve_scan = true, an install of a CVE-heavy package surfaces findings.
+
+    This exercises the opt-in CVE pipeline end-to-end against the live OSV /
+    distro trackers. We deliberately do NOT hard-code an exit code: depending
+    on the configured severity policy a HIGH CVE warns (exit 0) while a
+    CRITICAL one blocks (exit 1). We only assert the pipeline ran to completion
+    (no hang) and actually emitted CVE findings. The severity floor is lowered
+    so findings are not filtered out by the default HIGH floor.
+    """
+    cfg = tmp_path / "syspkg_cve_on.toml"
+    db = tmp_path / "syspkg_cve_on.db"
+    cfg.write_text(
+        f'[cache]\ndb_path = "{db}"\n\n'
+        "[syspkg]\nenabled = true\ncve_scan = true\n"
+        'severity_floor = "LOW"\nmax_findings = 50\n'
+    )
+    result = _guard_cli("apt-get", "install", "curl", config=cfg)
+
+    combined = result.stdout + result.stderr
+    # Ran to completion without timing out, and did not crash.
+    assert result.returncode in (0, 1)
+    assert "SP1.1" in combined or "WARNING" in combined
+    # CVE pipeline produced findings (flagged-for-review and/or blocked output).
+    assert "CVE(s)" in combined

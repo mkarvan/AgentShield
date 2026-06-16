@@ -351,10 +351,32 @@ class TestSysPkgConfig:
         from agentshield.core.config import Config
 
         cfg = Config()
+        # Detection is on by default; CVE scanning is opt-in (off by default).
         assert cfg.syspkg.enabled is True
-        assert cfg.syspkg.cve_scan is True
+        assert cfg.syspkg.cve_scan is False
+        # Severity floor + findings cap defaults keep opt-in scanning quiet.
+        assert cfg.syspkg.severity_floor.value == "HIGH"
+        assert cfg.syspkg.max_findings == 50
         assert cfg.syspkg.severity_policy.critical.value == "block"
         assert cfg.syspkg.severity_policy.high.value == "warn_confirm"
+
+    def test_severity_floor_and_cap_from_toml(self, tmp_path: Path) -> None:
+        from agentshield.core.config import Config
+
+        cfg_path = tmp_path / "config.toml"
+        cfg_path.write_text(
+            """\
+[syspkg]
+enabled = true
+cve_scan = true
+severity_floor = "MEDIUM"
+max_findings = 10
+"""
+        )
+        cfg = Config.load(cfg_path)
+        assert cfg.syspkg.cve_scan is True
+        assert cfg.syspkg.severity_floor.value == "MEDIUM"
+        assert cfg.syspkg.max_findings == 10
 
     def test_config_from_toml(self, tmp_path: Path) -> None:
         from agentshield.core.config import Config

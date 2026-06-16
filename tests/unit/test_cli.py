@@ -235,3 +235,33 @@ def test_cache_stats_shows_curated_and_cached():
     assert result.exit_code == 0
     assert "curated" in result.output
     assert "cached from OSV" in result.output
+
+
+# ── hook (Claude Code / Codex PreToolUse) ─────────────────────────────────────
+
+
+def test_hook_no_install_allows(tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("offline = true\n")
+    payload = '{"tool_name": "Bash", "tool_input": {"command": "ls -la"}}'
+    result = runner.invoke(app, ["hook", "--config", str(cfg)], input=payload)
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
+def test_hook_unverifiable_manager_denies(tmp_path):
+    # gem has no scan backend → fail closed → permissionDecision deny (no network)
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("offline = true\n")
+    payload = '{"tool_name": "Bash", "tool_input": {"command": "gem install foo"}}'
+    result = runner.invoke(app, ["hook", "--config", str(cfg)], input=payload)
+    assert result.exit_code == 0
+    assert '"permissionDecision": "deny"' in result.stdout
+
+
+def test_hook_malformed_payload_does_not_block(tmp_path):
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("offline = true\n")
+    result = runner.invoke(app, ["hook", "--config", str(cfg)], input="not json at all")
+    assert result.exit_code == 0
+    assert '"permissionDecision"' not in result.stdout

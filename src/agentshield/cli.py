@@ -879,6 +879,69 @@ def guard_scan_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command(context_settings={"ignore_unknown_options": True})
+def hook(
+    agent: str = typer.Option(
+        "claude-code",
+        "--agent",
+        "-a",
+        help="Requesting agent dialect: 'claude-code' (default) or 'codex'.",
+    ),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
+) -> None:
+    """PreToolUse hook for Claude Code and OpenAI Codex.
+
+    Reads the agent's PreToolUse payload as JSON on stdin, scans every package
+    install in the pending shell command through the shared scan core, and emits
+    the agent's block/allow contract:
+
+    * BLOCK  → stdout JSON ``permissionDecision: "deny"`` (exit 0)
+    * WARN   → ``"ask"`` on Claude Code (user is prompted); ``"deny"`` on Codex
+               (which does not honor "ask" yet) — fail-closed either way
+    * ALLOW  → exit 0 with no output (the call proceeds normally)
+
+    Detected installs that cannot be verified (shell expansion, VCS URLs, remote
+    requirements files, gem/go, untrusted conda channels, scanner errors) fail
+    closed and are denied.
+
+    Claude Code (.claude/settings.json)::
+
+        {"hooks": {"PreToolUse": [{"matcher": "Bash",
+          "hooks": [{"type": "command", "command": "agentshield hook"}]}]}}
+
+    Codex (~/.codex/hooks.json; needs ``codex_hooks = true`` under [features])::
+
+        {"hooks": {"PreToolUse": [{"matcher": "Bash",
+          "hooks": [{"type": "command", "command": "agentshield hook --agent codex"}]}]}}
+    """
+    import sys
+
+    from agentshield.core.config import Config
+    from agentshield.integrations.claude_code import AGENTS, CLAUDE_CODE, run_hook
+
+    agent_norm = agent.strip().lower()
+    if agent_norm not in AGENTS:
+        Console(stderr=True).print(
+            f"[yellow]AgentShield hook: unknown --agent '{agent}', "
+            f"defaulting to '{CLAUDE_CODE}'[/yellow]"
+        )
+        agent_norm = CLAUDE_CODE
+
+    try:
+        stdin_text = sys.stdin.read()
+    except Exception:  # noqa: BLE001 — no stdin (e.g. a TTY) means nothing to scan
+        stdin_text = ""
+
+    cfg = Config.load(config)
+    response = run_hook(stdin_text, agent=agent_norm, config=cfg)
+
+    if response.stdout:
+        sys.stdout.write(response.stdout)
+    if response.stderr:
+        sys.stderr.write(response.stderr)
+    raise typer.Exit(code=response.exit_code)
+
+
 @app.command()
 def serve(
     mcp: bool = typer.Option(False, "--mcp", help="Run as MCP tool server (stdio transport)"),

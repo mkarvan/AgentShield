@@ -57,12 +57,14 @@ E2E_TAG="agentshield-e2e"            # source tag for cleanup
 MARKER="REAL_PM_RAN"                 # printed by the fake downstream binary
 
 # Deterministic NEEDS_CONFIRMATION / LOG_ASYNC seeds (warn_confirm fix).
-# The default SeverityPolicy maps HIGH -> WARN_CONFIRM -> NEEDS_CONFIRMATION and
-# MEDIUM -> ASYNC_REPORT -> LOG_ASYNC. In offline mode the scanner reads the local
-# `cve_mirror` table and emits a finding at the row's severity, so a single seeded
-# cve_mirror row makes a package resolve deterministically to either verdict —
-# the same DB-row seeding family used for the malicious sentinel above. Rows are
-# tagged with the AS-E2E- id prefix and deleted on entry AND on exit (trap).
+# In offline mode the scanner reads the local `cve_mirror` table and emits a
+# finding whose rule_id is the row id, so a single seeded cve_mirror row makes a
+# package produce a finding deterministically — the same DB-row seeding family
+# used for the malicious sentinel above. The *verdict* (NEEDS_CONFIRMATION vs
+# LOG_ASYNC) is NOT left to the ambient severity policy (a container config may
+# map e.g. high=block): §11 writes a config that pins these rule_ids with a
+# rule-level mode override, which takes priority over any severity policy. Rows
+# are tagged with the AS-E2E- id prefix and deleted on entry AND on exit (trap).
 WARN_PKG="agentshield-e2e-sentinel-warn"     # HIGH cve row  -> NEEDS_CONFIRMATION
 ASYNC_PKG="agentshield-e2e-sentinel-async"   # MEDIUM cve row -> LOG_ASYNC
 CACHE_PROBE="agentshield-e2e-cache-probe"    # clean pkg for the cache-key test
@@ -101,11 +103,28 @@ LIB="$TMP/libagentshield_exec.so"
 OFFLINE_BACKUP="$TMP/offline_good_backup.json"
 PROXY_PIDS=""
 
+# warn_confirm section writes a deterministic config to the DEFAULT config path so
+# verdicts don't depend on the container's ambient severity policy (which may map
+# high=block). These track the backup so it is restored on exit even if the script
+# is interrupted mid-section.
+WC_CFGPATH=""             # default config path (resolved in preconditions)
+WC_CFG_BAK="$TMP/wc_config.bak"
+WC_CFG_STATE=none         # none | saved | created — what restore must undo
+
 P_PASS=0; P_FAIL=0; P_SKIP=0
 
 say()  { printf '%s\n' "$*"; }
 hr()   { printf '%s\n' "------------------------------------------------------------------------"; }
 head2(){ printf '\n%s== %s ==%s\n' "$BLD" "$*" "$RST"; }
+
+# Restore the default config that the warn_confirm section temporarily overwrote.
+restore_warn_config() {
+    case "$WC_CFG_STATE" in
+        saved)   [ -f "$WC_CFG_BAK" ] && cp "$WC_CFG_BAK" "$WC_CFGPATH" ;;
+        created) rm -f "$WC_CFGPATH" ;;
+    esac
+    WC_CFG_STATE=none
+}
 
 # ----------------------------------------------------------------------------
 # Cleanup
@@ -118,6 +137,8 @@ cleanup() {
     delete_sentinels 2>/dev/null
     # delete the warn/async cve_mirror seeds (AS-E2E- prefixed rows)
     delete_warn_rows 2>/dev/null
+    # restore the default config the warn_confirm section may have overwritten
+    restore_warn_config 2>/dev/null
     # restore any offline CVE/malicious rows we temporarily removed for GOOD pkgs
     restore_good_offline 2>/dev/null
     rm -rf "$TMP" 2>/dev/null
@@ -176,8 +197,9 @@ except Exception:
 PYEOF
 }
 
-# cve_mirror seeds that make a package resolve to NEEDS_CONFIRMATION (HIGH) and
-# LOG_ASYNC (MEDIUM) under the DEFAULT severity policy, in offline mode.
+# cve_mirror seeds that make WARN_PKG / ASYNC_PKG produce a finding offline. The
+# row id becomes the finding's rule_id, which §11's config pins to warn_confirm /
+# async_report via a rule-level override (severity here is incidental).
 insert_warn_rows() {
     python3 - <<PYEOF
 import asyncio
@@ -185,12 +207,12 @@ from agentshield.core.config import CacheConfig, DEFAULT_DB_PATH
 from agentshield.core.cache import ScanCache
 c = ScanCache(CacheConfig(db_path=DEFAULT_DB_PATH))
 async def main():
-    # HIGH  -> defaults.high  = WARN_CONFIRM  -> NEEDS_CONFIRMATION (must pause)
+    # rule_id AS-E2E-WARN-1  -> pinned to warn_confirm  -> NEEDS_CONFIRMATION
     await c.upsert_cve("$E2E_CVE_PREFIX-WARN-1", "$WARN_PKG", "pypi", "*", "HIGH", 7.5,
-                       "e2e warn sentinel (HIGH -> NEEDS_CONFIRMATION)")
-    # MEDIUM -> defaults.medium = ASYNC_REPORT -> LOG_ASYNC (warn-only, proceeds)
+                       "e2e warn sentinel (rule-pinned -> NEEDS_CONFIRMATION)")
+    # rule_id AS-E2E-ASYNC-1 -> pinned to async_report -> LOG_ASYNC (proceeds)
     await c.upsert_cve("$E2E_CVE_PREFIX-ASYNC-1", "$ASYNC_PKG", "pypi", "*", "MEDIUM", 5.0,
-                       "e2e async sentinel (MEDIUM -> LOG_ASYNC)")
+                       "e2e async sentinel (rule-pinned -> LOG_ASYNC)")
 asyncio.run(main())
 PYEOF
 }
@@ -351,8 +373,10 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 AGENTSHIELD_BIN=$(command -v agentshield); export AGENTSHIELD_BIN
 DBPATH=$(python3 -c 'from agentshield.core.config import DEFAULT_DB_PATH; print(DEFAULT_DB_PATH)' 2>/dev/null)
+WC_CFGPATH=$(python3 -c 'from agentshield.core.config import DEFAULT_CONFIG_PATH; print(DEFAULT_CONFIG_PATH)' 2>/dev/null)
 say "agentshield binary : $AGENTSHIELD_BIN"
 say "malicious DB path  : ${DBPATH:-<unknown>}"
+say "default config path: ${WC_CFGPATH:-<unknown>}"
 say "offline mode       : AGENTSHIELD_OFFLINE=$AGENTSHIELD_OFFLINE"
 HAVE_CC=no; for c in cc gcc clang; do command -v "$c" >/dev/null 2>&1 && HAVE_CC=yes && break; done
 HAVE_BASH=no; command -v bash >/dev/null 2>&1 && HAVE_BASH=yes
@@ -772,11 +796,38 @@ fi
 # 11. warn_confirm: NEEDS_CONFIRMATION must PAUSE (it previously proceeded)
 # ============================================================================
 head2 "11. warn_confirm (NEEDS_CONFIRMATION must pause)"
+# Determinism: the verdict must NOT depend on the container's ambient severity
+# policy. A real container config may map e.g. high=block, which would turn the
+# HIGH-severity warn seed into a BLOCK (exit 1) rather than NEEDS_CONFIRMATION
+# (exit 2) and make assume-yes unable to override it. So we write a deterministic
+# config to the DEFAULT config path that pins our seeded findings' rule_ids with a
+# rule-level mode override (which takes priority over ANY severity policy):
+#   AS-E2E-WARN-1  -> warn_confirm  -> NEEDS_CONFIRMATION
+#   AS-E2E-ASYNC-1 -> async_report  -> LOG_ASYNC
+# The original config is backed up and restored on exit (trap) and below.
+if [ -n "$WC_CFGPATH" ]; then
+    mkdir -p "$(dirname "$WC_CFGPATH")"
+    if [ -f "$WC_CFGPATH" ]; then cp "$WC_CFGPATH" "$WC_CFG_BAK"; WC_CFG_STATE=saved
+    else WC_CFG_STATE=created; fi
+    cat > "$WC_CFGPATH" <<CFGEOF
+# AgentShield e2e warn_confirm fixture — rule overrides beat any severity policy.
+[rules."$E2E_CVE_PREFIX-WARN-1"]
+mode = "warn_confirm"
+
+[rules."$E2E_CVE_PREFIX-ASYNC-1"]
+mode = "async_report"
+CFGEOF
+    agentshield cache clear >/dev/null 2>&1
+    say "Pinned warn/async verdicts via rule overrides in $WC_CFGPATH (restored on exit)."
+else
+    say "${YEL}WARN: default config path unresolved; warn_confirm verdicts fall back to ambient policy.${RST}"
+fi
+
 # Distinct exit codes straight from guard-scan-cmd (non-interactive):
 #   BLOCK=1, NEEDS_CONFIRMATION-not-confirmed=2, proceed=0.
-grade "warn_confirm exit code is 2" 2 "$(guard_exit pip install $WARN_PKG)"  "guard-scan-cmd pip install \$WARN (HIGH -> NEEDS_CONFIRMATION)"
+grade "warn_confirm exit code is 2" 2 "$(guard_exit pip install $WARN_PKG)"  "guard-scan-cmd pip install \$WARN (rule override -> NEEDS_CONFIRMATION)"
 grade "block exit code is 1"        1 "$(guard_exit pip install $BAD)"       "guard-scan-cmd pip install \$BAD (CRITICAL -> BLOCK)"
-grade "log_async exit code is 0"    0 "$(guard_exit pip install $ASYNC_PKG)" "guard-scan-cmd pip install \$ASYNC (MEDIUM -> LOG_ASYNC, proceeds)"
+grade "log_async exit code is 0"    0 "$(guard_exit pip install $ASYNC_PKG)" "guard-scan-cmd pip install \$ASYNC (rule override -> LOG_ASYNC, proceeds)"
 grade "assume-yes overrides to 0"   0 "$(guard_exit_assume_yes pip install $WARN_PKG)" "AGENTSHIELD_ASSUME_YES=1 guard-scan-cmd pip install \$WARN"
 
 # End-to-end through the REAL guard shell wrapper / PATH shim: a NEEDS_CONFIRMATION
@@ -807,6 +858,10 @@ else
     skip "warn_confirm LOG_ASYNC proceeds (manager runs)" ALLOW "$_why"
     skip "warn_confirm ASSUME_YES proceeds (manager runs)" ALLOW "$_why"
 fi
+# Restore the ambient config now so the cache section (and anything after) sees
+# the original; the cleanup trap restores too as a safety net.
+restore_warn_config
+agentshield cache clear >/dev/null 2>&1
 
 # ============================================================================
 # 12. cache key isolation: a clean cached verdict must not suppress later checks

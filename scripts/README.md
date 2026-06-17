@@ -185,8 +185,11 @@ What it does:
   - index proxy: env injection + block/allow + transitive-dependency block
   - posture scan
   - **warn_confirm contract** (section 11): a seeded `NEEDS_CONFIRMATION` package
-    (a `cve_mirror` HIGH row → default `WARN_CONFIRM`) makes `guard-scan-cmd` exit
-    `2` non-interactively and the real **PATH shim ABORT** the install (the fake
+    (a `cve_mirror` row whose `rule_id` is pinned to `warn_confirm` via a written
+    **rule-level mode override** — so the verdict is independent of the
+    container's ambient severity policy, which may map e.g. `high = block`) makes
+    `guard-scan-cmd` exit `2` non-interactively and the real **PATH shim ABORT**
+    the install (the fake
     package manager must NOT run — this is the regression that previously
     proceeded); a `LOG_ASYNC`-class package (MEDIUM row) still proceeds (exit `0`,
     manager runs); `AGENTSHIELD_ASSUME_YES=1` lets the confirmation case proceed

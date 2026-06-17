@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 import time
 from importlib.metadata import version as _meta_version
 from pathlib import Path
@@ -30,6 +32,57 @@ from agentshield.core.scanner import AgentShield
 
 app = typer.Typer(name="agentshield", help="Security layer for AI agent package installations")
 console = Console()
+
+# ── guard-scan-cmd exit codes ─────────────────────────────────────────────────
+# The shell wrapper (guard/shell_wrapper.py) and PATH shim (enforce/shim.py) only
+# distinguish zero (proceed) from non-zero (abort), but distinct codes let callers
+# and tests tell *why* an install was stopped.
+GUARD_EXIT_OK = 0  # ALLOW, or warn-only LOG_ASYNC, or a human-confirmed install
+GUARD_EXIT_BLOCK = 1  # hard BLOCK — must not install
+GUARD_EXIT_NEEDS_CONFIRMATION = 2  # confirmation required but not granted (fail-closed)
+
+
+def _guard_confirmation_granted(err_console: Console) -> bool:
+    """Decide a ``NEEDS_CONFIRMATION`` verdict by pausing for a human.
+
+    Per the model contract (core/models.py: ``DecisionAction.NEEDS_CONFIRMATION``)
+    the operation must pause and wait for an explicit human allow/deny before
+    proceeding. So:
+
+    * On an interactive TTY, prompt the user and return their answer.
+    * In any non-interactive context — the agent / CI / shim / execve case — there
+      is no human to pause for, so we FAIL CLOSED (return ``False`` → block) rather
+      than silently proceeding.
+    * ``AGENTSHIELD_ASSUME_YES=1`` is an explicit opt-out for automation that has
+      approved installs through some other channel; it auto-approves and is the
+      *only* way a non-interactive caller proceeds past NEEDS_CONFIRMATION.
+    """
+    if os.environ.get("AGENTSHIELD_ASSUME_YES") == "1":
+        err_console.print(
+            "[yellow]AgentShield: AGENTSHIELD_ASSUME_YES=1 set — auto-approving "
+            "items that require confirmation.[/yellow]"
+        )
+        return True
+
+    interactive = (
+        sys.stdin.isatty()
+        and sys.stderr.isatty()
+        and os.environ.get("AGENTSHIELD_NONINTERACTIVE") != "1"
+    )
+    if not interactive:
+        err_console.print(
+            "[red]AgentShield: confirmation required but no interactive terminal is "
+            "available — failing closed (install blocked). Re-run interactively, or "
+            "set AGENTSHIELD_ASSUME_YES=1 if this install was approved out of band."
+            "[/red]"
+        )
+        return False
+
+    try:
+        return bool(typer.confirm("Proceed with the install above?", default=False))
+    except (EOFError, KeyboardInterrupt, typer.Abort):
+        err_console.print("[red]AgentShield: confirmation aborted — blocking.[/red]")
+        return False
 
 
 def _version_callback(value: bool | None) -> None:
@@ -875,26 +928,46 @@ def guard_scan_cmd(
 
     blocked = [(label, d.reason) for label, d in results if d.action == DecisionAction.BLOCK]
     blocked.extend(unverifiable)
-    warned = [
-        (label, d.reason)
-        for label, d in results
-        if d.action in (DecisionAction.NEEDS_CONFIRMATION, DecisionAction.LOG_ASYNC)
+    # LOG_ASYNC (ResponseMode.ASYNC_REPORT) is warn-only: surface it, then proceed.
+    # NEEDS_CONFIRMATION (ResponseMode.WARN_CONFIRM) is NOT warn-only — per the
+    # model contract it must pause for an explicit human allow/deny before the real
+    # package manager runs. The two were previously merged into a single "warned"
+    # bucket that always exited 0, letting the wrapper/shim run the install while
+    # only printing a warning. They are split here.
+    log_async = [(label, d.reason) for label, d in results if d.action == DecisionAction.LOG_ASYNC]
+    needs_confirmation = [
+        (label, d.reason) for label, d in results if d.action == DecisionAction.NEEDS_CONFIRMATION
     ]
 
-    if warned:
+    if log_async:
         console.print(
-            f"[yellow]AgentShield: {len(warned)} item(s) flagged for review[/yellow]",
+            f"[yellow]AgentShield: {len(log_async)} item(s) logged for async "
+            f"review — proceeding[/yellow]",
         )
-        for label, reason in warned:
+        for label, reason in log_async:
             console.print(f"  • {label}: {reason}")
 
+    # A hard BLOCK takes precedence over everything else.
     if blocked:
         console.print(
             f"[red]AgentShield BLOCKED {len(blocked)} item(s):[/red]",
         )
         for label, reason in blocked:
             console.print(f"  • {label}: {reason}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=GUARD_EXIT_BLOCK)
+
+    # NEEDS_CONFIRMATION: pause. Prompt on an interactive TTY; fail closed otherwise.
+    if needs_confirmation:
+        console.print(
+            f"[yellow]AgentShield: {len(needs_confirmation)} item(s) require "
+            f"confirmation before install:[/yellow]",
+        )
+        for label, reason in needs_confirmation:
+            console.print(f"  • {label}: {reason}")
+        if _guard_confirmation_granted(err_console):
+            console.print("[green]AgentShield: confirmation granted — proceeding.[/green]")
+            return
+        raise typer.Exit(code=GUARD_EXIT_NEEDS_CONFIRMATION)
 
 
 @app.command(context_settings={"ignore_unknown_options": True})

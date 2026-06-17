@@ -265,3 +265,118 @@ def test_hook_malformed_payload_does_not_block(tmp_path):
     result = runner.invoke(app, ["hook", "--config", str(cfg)], input="not json at all")
     assert result.exit_code == 0
     assert '"permissionDecision"' not in result.stdout
+
+
+# ── guard-scan-cmd: LOG_ASYNC vs NEEDS_CONFIRMATION (warn_confirm contract) ────
+# Regression for the audit finding: NEEDS_CONFIRMATION must pause (fail closed
+# when non-interactive), while LOG_ASYNC is warn-only and proceeds. Previously
+# both exited 0, letting the shell wrapper / PATH shim run the install anyway.
+
+from types import SimpleNamespace  # noqa: E402
+
+from agentshield.cli import (  # noqa: E402
+    GUARD_EXIT_BLOCK,
+    GUARD_EXIT_NEEDS_CONFIRMATION,
+    _guard_confirmation_granted,
+)
+from agentshield.core.models import (  # noqa: E402
+    Decision,
+    DecisionAction,
+    ScanResult,
+    Severity,
+)
+from agentshield.core.scanner import AgentShield  # noqa: E402
+
+
+def _ascan_returning(action: DecisionAction):
+    async def _fake(self, request):  # noqa: ANN001
+        return ScanResult(
+            request=request,
+            findings=[],
+            max_severity=Severity.NONE,
+            decision=Decision(action=action, reason=f"{action.value} by policy"),
+        )
+
+    return _fake
+
+
+def _guard_invoke(tmp_path, env=None):
+    return runner.invoke(
+        app,
+        ["guard-scan-cmd", "pip", "install", "somepkg", "--config", str(tmp_path / "no.toml")],
+        env=env,
+    )
+
+
+def test_guard_log_async_proceeds_exit_0(tmp_path):
+    with patch.object(AgentShield, "ascan", _ascan_returning(DecisionAction.LOG_ASYNC)):
+        result = _guard_invoke(tmp_path)
+    assert result.exit_code == 0, result.output
+    assert "async review" in result.output.lower()
+
+
+def test_guard_needs_confirmation_blocks_when_noninteractive(tmp_path):
+    # Under CliRunner stdin/stderr are not TTYs → the agent case → fail closed.
+    with patch.object(AgentShield, "ascan", _ascan_returning(DecisionAction.NEEDS_CONFIRMATION)):
+        result = _guard_invoke(tmp_path)
+    assert result.exit_code == GUARD_EXIT_NEEDS_CONFIRMATION, result.output
+    assert "confirmation" in result.output.lower()
+
+
+def test_guard_needs_confirmation_assume_yes_proceeds(tmp_path):
+    with patch.object(AgentShield, "ascan", _ascan_returning(DecisionAction.NEEDS_CONFIRMATION)):
+        result = _guard_invoke(tmp_path, env={"AGENTSHIELD_ASSUME_YES": "1"})
+    assert result.exit_code == 0, result.output
+
+
+def test_guard_block_exits_1(tmp_path):
+    with patch.object(AgentShield, "ascan", _ascan_returning(DecisionAction.BLOCK)):
+        result = _guard_invoke(tmp_path)
+    assert result.exit_code == GUARD_EXIT_BLOCK, result.output
+    assert "BLOCKED" in result.output
+
+
+def _fake_sys(*, stdin_tty: bool, stderr_tty: bool):
+    return SimpleNamespace(
+        stdin=SimpleNamespace(isatty=lambda: stdin_tty),
+        stderr=SimpleNamespace(isatty=lambda: stderr_tty),
+    )
+
+
+def test_confirmation_helper_fails_closed_when_noninteractive(monkeypatch):
+    monkeypatch.delenv("AGENTSHIELD_ASSUME_YES", raising=False)
+    monkeypatch.setattr("agentshield.cli.sys", _fake_sys(stdin_tty=False, stderr_tty=False))
+    from rich.console import Console
+
+    assert _guard_confirmation_granted(Console(stderr=True)) is False
+
+
+def test_confirmation_helper_prompts_and_grants_when_interactive(monkeypatch):
+    monkeypatch.delenv("AGENTSHIELD_ASSUME_YES", raising=False)
+    monkeypatch.delenv("AGENTSHIELD_NONINTERACTIVE", raising=False)
+    monkeypatch.setattr("agentshield.cli.sys", _fake_sys(stdin_tty=True, stderr_tty=True))
+    from rich.console import Console
+
+    with patch("agentshield.cli.typer.confirm", return_value=True) as confirm:
+        assert _guard_confirmation_granted(Console(stderr=True)) is True
+    confirm.assert_called_once()
+
+
+def test_confirmation_helper_prompts_and_denies_when_interactive(monkeypatch):
+    monkeypatch.delenv("AGENTSHIELD_ASSUME_YES", raising=False)
+    monkeypatch.delenv("AGENTSHIELD_NONINTERACTIVE", raising=False)
+    monkeypatch.setattr("agentshield.cli.sys", _fake_sys(stdin_tty=True, stderr_tty=True))
+    from rich.console import Console
+
+    with patch("agentshield.cli.typer.confirm", return_value=False):
+        assert _guard_confirmation_granted(Console(stderr=True)) is False
+
+
+def test_confirmation_helper_noninteractive_override_blocks_even_with_tty(monkeypatch):
+    # AGENTSHIELD_NONINTERACTIVE=1 forces the fail-closed path even on a TTY.
+    monkeypatch.delenv("AGENTSHIELD_ASSUME_YES", raising=False)
+    monkeypatch.setenv("AGENTSHIELD_NONINTERACTIVE", "1")
+    monkeypatch.setattr("agentshield.cli.sys", _fake_sys(stdin_tty=True, stderr_tty=True))
+    from rich.console import Console
+
+    assert _guard_confirmation_granted(Console(stderr=True)) is False

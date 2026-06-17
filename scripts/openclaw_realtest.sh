@@ -53,9 +53,21 @@ command -v node >/dev/null 2>&1 || { echo "FATAL: node not found (OpenClaw needs
 command -v "$AGENTSHIELD_BIN" >/dev/null 2>&1 || { echo "FATAL: '$AGENTSHIELD_BIN' not on PATH - install agentshield (pipx install agentshield)"; exit 2; }
 [ -f "$PLUGIN_DIR/index.mjs" ] || { echo "FATAL: plugin not found at $PLUGIN_DIR"; exit 2; }
 
-# Deterministic, offline verdicts.
+# Deterministic, offline verdicts. Back up any existing config and restore it on
+# exit via a trap (covers early exits too); if there was no config, remove the
+# temporary one we write.
+CFG_CREATED=0
+restore_cfg() {
+  if [ -f "$CFG.realtest.bak" ]; then
+    mv "$CFG.realtest.bak" "$CFG" && echo "restored original $CFG"
+  elif [ "$CFG_CREATED" = 1 ]; then
+    rm -f "$CFG" && echo "removed temporary test config $CFG"
+  fi
+}
+trap restore_cfg EXIT INT TERM
+
 mkdir -p "$(dirname "$CFG")"
-[ -f "$CFG" ] && cp "$CFG" "$CFG.realtest.bak"
+if [ -f "$CFG" ]; then cp "$CFG" "$CFG.realtest.bak"; else CFG_CREATED=1; fi
 printf 'denylist = ["%s"]\nallowlist = ["%s"]\n' "$BAD" "$GOOD" > "$CFG"
 echo "wrote deterministic test config -> $CFG"
 hr
@@ -145,6 +157,45 @@ NODE
 real_rc=$?
 hr
 if [ "$real_rc" -eq 0 ]; then ok "real handler dispatch (bad blocked, good allowed)"; else bad "real handler dispatch (exit $real_rc)"; fi
+
+# --- 2b. Scanner-unavailable fallback (CLI missing -> JS fail-closed) ---------
+# When the agentshield CLI cannot run, the plugin must still FAIL CLOSED for
+# install-looking commands via its broadened JS fallback (INSTALL_RE) — including
+# `python -m pip install` AND the attached `python -mpip install` form that the
+# pre-fix regex missed. We make the CLI unavailable by pointing AGENTSHIELD_BIN at
+# a missing binary and drive the REAL evaluateToolCall with its REAL default
+# runner (which spawns $AGENTSHIELD_BIN and gets ENOENT).
+hr
+echo "Scanner-unavailable fallback (CLI missing -> JS fail-closed):"
+fb_rc=0
+AGENTSHIELD_BIN="$HERE/.no-such-agentshield-$$" node --input-type=module - "$PLUGIN_DIR" "$BAD" <<'NODE'
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+const [pluginDir, BAD] = process.argv.slice(2);
+const { evaluateToolCall } = await import(
+  pathToFileURL(path.join(pluginDir, "scan-command.mjs")).href
+);
+let rc = 0;
+// Real default runner spawns process.env.AGENTSHIELD_BIN -> ENOENT -> fail closed.
+const mustBlock = [
+  `pip install ${BAD}`,
+  `python -m pip install ${BAD}`,
+  `python -mpip install ${BAD}`,   // attached -m form — the previously-missed case
+  `python3 -mpip install ${BAD}`,
+];
+for (const cmd of mustBlock) {
+  const r = evaluateToolCall("exec", { command: cmd });
+  if (r && r.block) console.log(`  PASS  fallback blocked: ${cmd}`);
+  else { console.log(`  FAIL  fallback did NOT block: ${cmd}`); rc = 1; }
+}
+const safe = evaluateToolCall("exec", { command: "ls -la" });
+if (!safe) console.log("  PASS  fallback allows non-install: ls -la");
+else { console.log("  FAIL  fallback blocked a non-install command"); rc = 1; }
+process.exit(rc);
+NODE
+fb_rc=$?
+if [ "$fb_rc" -eq 0 ]; then ok "scanner-unavailable fallback (installs blocked, non-install allowed)"; else bad "scanner-unavailable fallback (exit $fb_rc)"; fi
+hr
 
 # --- Purge stale agentshield debris from prior (broken) installs -------------
 # A previously-broken install can leave an extension dir whose OLD manifest lacks
@@ -247,9 +298,7 @@ if [ "${OPENCLAW_LLM_E2E:-0}" = "1" ] && command -v openclaw >/dev/null 2>&1; th
   if grep -qi "agentshield\|block" "$LOG"; then ok "LLM-driven exec install intercepted"; else bad "LLM-driven attempt not intercepted (see $LOG)"; fi
 fi
 
-# --- Restore config ----------------------------------------------------------
-[ -f "$CFG.realtest.bak" ] && mv "$CFG.realtest.bak" "$CFG" && echo "restored original $CFG"
-
+# Config is restored by the restore_cfg EXIT trap registered above.
 hr
 echo "RESULT: $pass passed, $fail failed"
 if [ "$fail" -eq 0 ] && [ "$real_rc" -eq 0 ]; then echo "OVERALL: PASS"; exit 0; else echo "OVERALL: FAIL"; exit 1; fi

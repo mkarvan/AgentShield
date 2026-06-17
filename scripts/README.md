@@ -9,7 +9,7 @@ container (the reference target is `alpine/arm64` managed via the macOS
 | `container_install_deps.sh` | Install every toolchain/runtime the harness needs so nothing is environment-skipped. |
 | `container_e2e_test.sh` | Self-grading end-to-end harness that drives every enforcement layer with a known-bad sentinel and a known-good package, and prints a PASS/FAIL table. |
 | `hermes_realtest.sh` | **Real-instance** test for a live Hermes box: loads the plugin through Hermes's own loader and drives its real `get_pre_tool_call_block_message` enforcement. FAILS if the `pre_tool_call` hook never fires. |
-| `openclaw_realtest.sh` | **Real-instance** test for a live OpenClaw box: drives the plugin's registered `before_tool_call` handler + the real `agentshield` CLI verdict oracle, blocking a bad `exec` install and allowing a good one. FAILS if the hook never fires. |
+| `openclaw_realtest.sh` | **Real-instance** test for a live OpenClaw box: drives the plugin's registered `before_tool_call` handler + the real `agentshield` CLI verdict oracle, blocking a bad `exec` install and allowing a good one. Also drives a **scanner-unavailable** case (CLI missing) proving the JS fallback fails closed for install forms — including `python -m pip install` and the attached `python -mpip install` — while allowing a non-install. FAILS if the hook never fires. |
 
 ## Real-instance tests (Hermes / OpenClaw)
 
@@ -166,6 +166,10 @@ What it does:
     self-verify-registered + fail-closed arg-key). (OpenClaw is a Node plugin —
     see `openclaw_realtest.sh` / `integrations/openclaw`, not this harness.)
   - `guard-scan-cmd` across all 15 managers + absolute-path + `command X`
+  - **boolean install flags** (`--save-exact`/`-E`, `--save-dev`, `-g`/`--global`,
+    `pnpm add -D`) must still parse the package and BLOCK the sentinel (regression
+    for the `--save-exact` bypass), with a `--registry <url>` control proving
+    genuine value-flags still consume their value
   - conda trusted vs untrusted channels
   - general fail-closed (unverifiable manager, unanalyzable args)
   - **Claude Code / Codex `PreToolUse` hook** (`agentshield hook`): bad →
@@ -173,9 +177,23 @@ What it does:
     manager + shell-expansion fail-closed, the `--agent codex` dialect, and a
     malformed payload that must **not** block
   - PATH shim baseline
-  - execve `LD_PRELOAD` interceptor (absolute-path / `command` / subprocess)
+  - execve `LD_PRELOAD` interceptor (absolute-path / `command` / subprocess), plus
+    **fail-closed when the scanner is unavailable** (`AGENTSHIELD_BIN` pointed at a
+    missing binary must BLOCK by default) and the **emergency**
+    `AGENTSHIELD_EXEC_FAIL_OPEN=1` override that re-allows with a loud stderr
+    diagnostic (C-compiler-gated, like the rest of the execve section)
   - index proxy: env injection + block/allow + transitive-dependency block
   - posture scan
+  - **warn_confirm contract** (section 11): a seeded `NEEDS_CONFIRMATION` package
+    (a `cve_mirror` HIGH row → default `WARN_CONFIRM`) makes `guard-scan-cmd` exit
+    `2` non-interactively and the real **PATH shim ABORT** the install (the fake
+    package manager must NOT run — this is the regression that previously
+    proceeded); a `LOG_ASYNC`-class package (MEDIUM row) still proceeds (exit `0`,
+    manager runs); `AGENTSHIELD_ASSUME_YES=1` lets the confirmation case proceed
+  - **cache-key isolation** (section 12): a clean shallow scan that gets cached
+    must NOT suppress a later `--deep` (cache miss) or `context_hint` scan of the
+    same package (the `T4.1` prompt-injection finding still surfaces), driven
+    through the real `ascan()` / `ScanCache` objects the CLI constructs
 
 ### Determinism notes
 
@@ -189,17 +207,22 @@ What it does:
 ### What a fully-passing run looks like
 
 Per-feature `PASS`/`FAIL`/`SKIP` lines, a final `RESULT TABLE`, then a summary.
-On a fully-provisioned container with network the validated result is:
+The core enforcement-surface coverage validated at `78/78` in a fully-provisioned
+`alpine/arm64` container; the five-audit-fix regression cases added on top (22
+graded checks: `guard` boolean-flag ×7, execve fail-closed/emergency-open ×4,
+warn_confirm ×7, cache-key isolation ×4) bring a fully-provisioned run to:
 
 ```
-SUMMARY: 78/78 passed, 0 skipped — ALL GRADED CHECKS PASSED.
+SUMMARY: 100/100 passed, 0 skipped — ALL GRADED CHECKS PASSED.
 ```
 
 The general form is `SUMMARY: <passed>/<total> passed, <skipped> skipped — ALL
 GRADED CHECKS PASSED.` (the exact case count moves as the harness grows). Exit
 code is `0` when there are no failures, non-zero otherwise (failures are also
 reprinted loudly in a `!!! FAILURES !!!` section). `SKIP`s are
-environment-gated: missing C compiler (execve build), missing `bash` (shim
-wrappers), or no network (proxy transitive resolution) — run
-`container_install_deps.sh` first, and ensure the container has network, to
-reach the 0-skip full table above.
+environment-gated: missing C compiler (execve build **and** the execve
+fail-closed cases), missing `bash` (PATH-shim wrappers — also gates the
+warn_confirm shim-abort cases), or no network (proxy transitive resolution) —
+run `container_install_deps.sh` first, and ensure the container has network, to
+reach the 0-skip full table above. The warn_confirm exit-code checks and the
+cache-key isolation checks need neither a compiler nor `bash` and always run.

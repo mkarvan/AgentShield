@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/agentshield-mascot.png" width="320" alt="AgentShield mascot"></p>
+
 # AgentShield
 
 **Security layer for AI agent frameworks.** AgentShield intercepts package installation requests made by AI agents, checks them against CVE databases and static analysis tools, enforces configurable response policies, and generates security posture reports — all locally, with no telemetry.

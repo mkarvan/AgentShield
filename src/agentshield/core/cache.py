@@ -95,7 +95,21 @@ class ScanCache:
     # ------------------------------------------------------------------ helpers
 
     def _key(self, request: ScanRequest) -> str:
-        raw = f"{request.ecosystem.value}:{request.package}:{request.version or ''}"
+        # The cache key must include every input that changes the scan verdict.
+        # Keying on ecosystem/package/version alone lets a prior *clean* scan —
+        # run without --deep, license checks, or a context hint — satisfy a later
+        # scan that DOES request those, silently serving a weaker cached verdict
+        # and suppressing deep static-analysis / license / prompt-injection
+        # findings. So fold in the deep and check_licenses flags and the
+        # context_hint. The hint is hashed because it is arbitrary, possibly long
+        # text that feeds the T4.1 prompt-injection heuristic; any change to it
+        # (including empty -> non-empty) yields a distinct entry.
+        ctx = request.context_hint or ""
+        ctx_digest = hashlib.sha256(ctx.encode()).hexdigest() if ctx else ""
+        raw = (
+            f"{request.ecosystem.value}:{request.package}:{request.version or ''}"
+            f":deep={int(request.deep)}:lic={int(request.check_licenses)}:ctx={ctx_digest}"
+        )
         return hashlib.sha256(raw.encode()).hexdigest()
 
     async def _ensure_schema(self, db: aiosqlite.Connection) -> None:

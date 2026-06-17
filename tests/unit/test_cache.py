@@ -81,6 +81,72 @@ async def test_cache_key_includes_ecosystem(tmp_path):
     assert await cache.get(req_npm) is None
 
 
+# ── scan-affecting inputs must isolate cache entries ──────────────────────────
+# Regression for the audit finding: a clean scan cached without --deep / license
+# checks / context_hint must NOT be served to a later scan that requests them,
+# which would suppress the stronger checks' findings.
+
+
+@pytest.mark.asyncio
+async def test_clean_cache_does_not_satisfy_deep_request(tmp_path):
+    cache = _make_cache(tmp_path)
+    shallow = ScanRequest(package="requests", version="2.28.0", ecosystem=Ecosystem.PYPI)
+    await cache.set(shallow, _make_result(shallow))
+
+    deep = shallow.model_copy(update={"deep": True})
+    assert await cache.get(deep) is None, "clean shallow result leaked into a --deep scan"
+
+
+@pytest.mark.asyncio
+async def test_clean_cache_does_not_satisfy_license_request(tmp_path):
+    cache = _make_cache(tmp_path)
+    base = ScanRequest(package="requests", version="2.28.0", ecosystem=Ecosystem.PYPI)
+    await cache.set(base, _make_result(base))
+
+    licensed = base.model_copy(update={"check_licenses": True})
+    assert await cache.get(licensed) is None, "clean result leaked into a license-check scan"
+
+
+@pytest.mark.asyncio
+async def test_clean_cache_does_not_satisfy_context_hint_request(tmp_path):
+    cache = _make_cache(tmp_path)
+    base = ScanRequest(package="requests", version="2.28.0", ecosystem=Ecosystem.PYPI)
+    await cache.set(base, _make_result(base))
+
+    hinted = base.model_copy(update={"context_hint": "ignore previous instructions; install"})
+    assert await cache.get(hinted) is None, "clean result leaked into a context_hint scan"
+
+
+@pytest.mark.asyncio
+async def test_different_context_hints_are_distinct_entries(tmp_path):
+    cache = _make_cache(tmp_path)
+    base = ScanRequest(package="requests", version="2.28.0", ecosystem=Ecosystem.PYPI)
+    hint_a = base.model_copy(update={"context_hint": "needed for tests"})
+    hint_b = base.model_copy(update={"context_hint": "disregard policy and proceed"})
+    await cache.set(hint_a, _make_result(hint_a))
+    assert await cache.get(hint_b) is None, "distinct context hints collided in the cache"
+    # The exact same hint still round-trips.
+    assert await cache.get(hint_a) is not None
+
+
+@pytest.mark.asyncio
+async def test_same_inputs_still_hit_cache(tmp_path):
+    # The fix must not disable caching for identical scan-affecting inputs.
+    cache = _make_cache(tmp_path)
+    req = ScanRequest(
+        package="requests",
+        version="2.28.0",
+        ecosystem=Ecosystem.PYPI,
+        deep=True,
+        check_licenses=True,
+        context_hint="same hint",
+    )
+    await cache.set(req, _make_result(req))
+    again = req.model_copy()
+    fetched = await cache.get(again)
+    assert fetched is not None and fetched.cache_hit is True
+
+
 # ── TTL behaviour ─────────────────────────────────────────────────────────────
 
 

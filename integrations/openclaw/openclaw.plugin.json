@@ -3,5 +3,9 @@
   "name": "AgentShield",
   "description": "Scans package installs before the exec tool runs them; blocks unsafe ones (fail-closed).",
   "version": "0.9.0",
-  "extensions": ["./index.mjs"]
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
 }

@@ -1,6 +1,8 @@
 // Unit tests for the AgentShield OpenClaw plugin decision logic.
 // Run: node --test  (Node >= 22). No network, no OpenClaw runtime needed —
-// the AgentShield CLI is replaced by a fake runner.
+// the AgentShield CLI is replaced by a fake runner that mimics
+// `agentshield guard-scan-cmd` (exit 1 = block, exit 0 = allow, exit 0 +
+// "flagged for review" = warn, exit 2 = CLI usage error).
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -10,19 +12,28 @@ import {
   HOOK_NAME,
   evaluateToolCall,
   extractCommand,
+  tokenize,
 } from "./scan-command.mjs";
 
-// Fake runners standing in for `agentshield hook --agent openclaw`.
-const blockRunner = (reason = "evil-pkg: known malicious") => () => ({
+// Fake runners standing in for `agentshield guard-scan-cmd <tokens>`.
+const blockRunner =
+  (item = "evilpkg", reason = "Package 'evilpkg' is on the denylist") =>
+  () => ({ status: 1, stdout: `AgentShield BLOCKED 1 item(s):\n  • ${item}: ${reason}`, stderr: "" });
+const allowRunner = () => ({ status: 0, stdout: "", stderr: "" });
+const warnRunner = () => ({
   status: 0,
-  stdout: JSON.stringify({ block: true, blockReason: reason }),
+  stdout: "AgentShield: 1 item(s) flagged for review\n  • sus: HIGH CVE",
   stderr: "",
 });
-const allowRunner = () => ({ status: 0, stdout: "", stderr: "" });
+const usageErrorRunner = () => ({
+  status: 2,
+  stdout: "",
+  stderr: "Usage: agentshield [OPTIONS] COMMAND [ARGS]...",
+});
 const throwingRunner = () => {
   throw new Error("ENOENT: agentshield not found");
 };
-const errorRunner = () => ({ status: null, stdout: "", stderr: "", error: new Error("spawn failed") });
+const spawnErrorRunner = () => ({ status: null, stdout: "", stderr: "", error: new Error("spawn failed") });
 
 // ── contract guard: fail if wired to something OpenClaw never calls ──────────
 
@@ -48,7 +59,7 @@ test("exec is the real OpenClaw shell tool we intercept", () => {
   assert.ok(EXEC_TOOL_NAMES.has("exec"));
 });
 
-// ── extraction ───────────────────────────────────────────────────────────────
+// ── extraction + tokenization ────────────────────────────────────────────────
 
 test("extractCommand reads command / cmd / script keys", () => {
   assert.equal(extractCommand({ command: "pip install x" }), "pip install x");
@@ -57,28 +68,58 @@ test("extractCommand reads command / cmd / script keys", () => {
   assert.equal(extractCommand({ other: "nope" }), null);
 });
 
-// ── decisions ────────────────────────────────────────────────────────────────
-
-test("bad install is blocked with the CLI's reason", () => {
-  const d = evaluateToolCall("exec", { command: "pip install evil-pkg" }, blockRunner());
-  assert.ok(d);
-  assert.equal(d.block, true);
-  assert.match(d.blockReason, /evil-pkg/);
+test("tokenize splits whitespace and honors quotes; operators stay separate", () => {
+  assert.deepEqual(tokenize("pip install requests"), ["pip", "install", "requests"]);
+  assert.deepEqual(tokenize("ls -la && pip install evilpkg"), [
+    "ls",
+    "-la",
+    "&&",
+    "pip",
+    "install",
+    "evilpkg",
+  ]);
+  assert.deepEqual(tokenize('pip install "name with space"'), [
+    "pip",
+    "install",
+    "name with space",
+  ]);
 });
 
-test("clean install is allowed (null)", () => {
-  const d = evaluateToolCall("exec", { command: "pip install requests" }, allowRunner);
-  assert.equal(d, null);
+test("the runner is given TOKENS, not the whole command string", () => {
+  let received = null;
+  evaluateToolCall("exec", { command: "pip install evilpkg" }, (tokens) => {
+    received = tokens;
+    return { status: 0, stdout: "", stderr: "" };
+  });
+  assert.deepEqual(received, ["pip", "install", "evilpkg"]);
+});
+
+// ── decisions ────────────────────────────────────────────────────────────────
+
+test("bad install (exit 1) is blocked with a cleaned reason", () => {
+  const d = evaluateToolCall("exec", { command: "pip install evilpkg" }, blockRunner());
+  assert.ok(d);
+  assert.equal(d.block, true);
+  assert.match(d.blockReason, /evilpkg/);
+  assert.doesNotMatch(d.blockReason, /BLOCKED 1 item/); // heading stripped
+});
+
+test("clean install (exit 0) is allowed (null)", () => {
+  assert.equal(evaluateToolCall("exec", { command: "pip install requests" }, allowRunner), null);
+});
+
+test("warn (exit 0 + flagged for review) fails closed to block", () => {
+  const d = evaluateToolCall("exec", { command: "pip install sus" }, warnRunner);
+  assert.ok(d);
+  assert.equal(d.block, true);
 });
 
 test("non-install command is allowed", () => {
-  const d = evaluateToolCall("exec", { command: "ls -la" }, allowRunner);
-  assert.equal(d, null);
+  assert.equal(evaluateToolCall("exec", { command: "ls -la" }, allowRunner), null);
 });
 
 test("non-exec tool is ignored", () => {
-  const d = evaluateToolCall("web_search", { query: "pip install evil" }, blockRunner());
-  assert.equal(d, null);
+  assert.equal(evaluateToolCall("web_search", { query: "pip install evil" }, blockRunner()), null);
 });
 
 test("exec with no command is allowed (nothing to run)", () => {
@@ -88,30 +129,29 @@ test("exec with no command is allowed (nothing to run)", () => {
 
 // ── fail-closed semantics ────────────────────────────────────────────────────
 
-test("CLI throwing on an install command FAILS CLOSED", () => {
-  const d = evaluateToolCall("exec", { command: "pip install evil-pkg" }, throwingRunner);
+test("CLI usage error (exit 2) on an install command FAILS CLOSED", () => {
+  const d = evaluateToolCall("exec", { command: "pip install evilpkg" }, usageErrorRunner);
   assert.ok(d);
   assert.equal(d.block, true);
   assert.match(d.blockReason, /fail closed/i);
 });
 
-test("CLI error on an install command FAILS CLOSED", () => {
-  const d = evaluateToolCall("exec", { command: "npm install evil" }, errorRunner);
+test("CLI usage error (exit 2) on a NON-install command does NOT wedge the shell", () => {
+  assert.equal(evaluateToolCall("exec", { command: "ls -la" }, usageErrorRunner), null);
+});
+
+test("CLI throwing on an install command FAILS CLOSED", () => {
+  const d = evaluateToolCall("exec", { command: "pip install evilpkg" }, throwingRunner);
+  assert.ok(d);
+  assert.equal(d.block, true);
+});
+
+test("spawn error on an install command FAILS CLOSED", () => {
+  const d = evaluateToolCall("exec", { command: "npm install evil" }, spawnErrorRunner);
   assert.ok(d);
   assert.equal(d.block, true);
 });
 
 test("CLI throwing on a NON-install command does not wedge the shell", () => {
-  const d = evaluateToolCall("exec", { command: "ls -la" }, throwingRunner);
-  assert.equal(d, null);
-});
-
-test("non-zero exit with non-JSON stdout is treated as block", () => {
-  const d = evaluateToolCall(
-    "exec",
-    { command: "pip install evil-pkg" },
-    () => ({ status: 1, stdout: "AgentShield BLOCKED 1 item(s)", stderr: "" }),
-  );
-  assert.ok(d);
-  assert.equal(d.block, true);
+  assert.equal(evaluateToolCall("exec", { command: "ls -la" }, throwingRunner), null);
 });

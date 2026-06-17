@@ -671,14 +671,17 @@ The hook **never raises** (Hermes swallows hook exceptions and would then run th
 
 ### OpenClaw — `before_tool_call` plugin (TypeScript)
 
-OpenClaw is a **TypeScript/Node** framework, so AgentShield ships a **Node plugin** (under `integrations/openclaw/`), not a Python module. It registers a `before_tool_call` hook on the `exec` tool and blocks unsafe installs by returning OpenClaw's `{ block: true, blockReason }`. Verdicts come from the `agentshield` CLI (`agentshield hook --agent openclaw`) — the same shared scan core used by the Hermes and Claude Code / Codex integrations.
+OpenClaw is a **TypeScript/Node** framework, so AgentShield ships a **Node plugin** (under `integrations/openclaw/`), not a Python module. It registers a `before_tool_call` hook on the `exec` tool and blocks unsafe installs by returning OpenClaw's `{ block: true, blockReason }`. Verdicts come from the `agentshield` CLI (`agentshield guard-scan-cmd <command tokens>` — exit 1 = block, exit 0 = allow), the same shared scan core used by the Hermes and Claude Code / Codex integrations.
+
+The plugin ships the required `openclaw.plugin.json` manifest with a `configSchema` (OpenClaw refuses to load a manifest without one), and its entry point lives in `package.json`'s `openclaw.extensions` block. OpenClaw also refuses **non-root-owned** plugin files — install as root (or `chown -R root:root` the plugin dir).
 
 > OpenClaw "skills" are SKILL.md prompt packs, not executable gates, and OpenClaw cannot load a Python class. The earlier Python `AgentShieldSkill` (registered via `module:`/`class:`) was never invoked — it has been removed.
 
-**Install** (in the OpenClaw box; AgentShield CLI must also be installed, e.g. `pipx install agentshield`):
+**Install** (in the OpenClaw box, **as root** — OpenClaw rejects non-root-owned plugin files; the AgentShield CLI must also be installed, e.g. `pipx install agentshield`):
 ```bash
 openclaw plugins install @agentshield/openclaw-plugin
-# or, from a checkout: openclaw plugins install ./integrations/openclaw
+# or, from a checkout (chown to root first if needed):
+sudo chown -R root:root ./integrations/openclaw && openclaw plugins install ./integrations/openclaw
 ```
 
 **Hook contract** (`before_tool_call`, `block: true` is terminal):

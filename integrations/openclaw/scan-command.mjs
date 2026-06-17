@@ -5,9 +5,17 @@
 // it to the real `before_tool_call` hook.
 //
 // Verdicts come from the AgentShield CLI — the single source of truth for
-// scanning — via `agentshield hook --agent openclaw`, which prints OpenClaw's
-// exact block shape `{ "block": true, "blockReason": "..." }` on stdout (and
-// nothing for allow). We never reimplement scanning here.
+// scanning — via `agentshield guard-scan-cmd <command tokens>`:
+//   * exit 0, no "flagged for review" text  -> ALLOW
+//   * exit 1                                -> BLOCK (reason printed on stdout)
+//   * exit 0 with "flagged for review"      -> warn -> BLOCK (fail closed)
+//   * any other exit / spawn error          -> CLI failure -> fail closed for
+//                                              install-looking commands only
+// `guard-scan-cmd` is the same backend the `agentshield guard` shell uses; it is
+// present in shipped 0.9.0 builds and takes the command as argv TOKENS (it
+// re-joins and parses them), so we must tokenize — passing the whole command as
+// one argument hides the install from the parser (fail-open). We never
+// reimplement scanning here.
 
 import { spawnSync } from "node:child_process";
 
@@ -38,12 +46,52 @@ export function extractCommand(params) {
 }
 
 /**
+ * Tokenize a shell command into argv for `guard-scan-cmd`.
+ *
+ * A minimal POSIX-ish splitter: whitespace-separated, honoring single and
+ * double quotes (quotes stripped). Operators written with surrounding spaces
+ * (`&&`, `;`, `|`) naturally become their own tokens, which `guard-scan-cmd`
+ * understands. This covers the commands an agent actually emits; the agnostic
+ * `agentshield guard` / shim layers remain the backstop for pathological input.
+ *
+ * @param {string} command
+ * @returns {string[]}
+ */
+export function tokenize(command) {
+  const tokens = [];
+  let cur = "";
+  let quote = null;
+  let has = false;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else cur += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      has = true;
+    } else if (c === " " || c === "\t" || c === "\n") {
+      if (has) {
+        tokens.push(cur);
+        cur = "";
+        has = false;
+      }
+    } else {
+      cur += c;
+      has = true;
+    }
+  }
+  if (has) tokens.push(cur);
+  return tokens;
+}
+
+/**
  * Decide whether an OpenClaw tool call should be blocked.
  *
  * @param {string} toolName
  * @param {Record<string, unknown>} params
- * @param {(command: string) => {status: number|null, stdout: string, stderr: string, error?: Error}} runner
- *        Invokes the AgentShield CLI for a command; defaults to the real CLI.
+ * @param {(tokens: string[]) => {status: number|null, stdout: string, stderr: string, error?: Error}} runner
+ *        Invokes the AgentShield CLI for command tokens; defaults to the real CLI.
  * @returns {{block: true, blockReason: string} | null}  null = allow.
  */
 export function evaluateToolCall(toolName, params, runner = runAgentShield) {
@@ -56,72 +104,72 @@ export function evaluateToolCall(toolName, params, runner = runAgentShield) {
     return null;
   }
 
+  const tokens = tokenize(command);
+  if (tokens.length === 0) return null;
+
   let res;
   try {
-    res = runner(command);
+    res = runner(tokens);
   } catch (err) {
-    // Runner blew up. Fail closed only if the command looks like an install we
-    // could not verify; otherwise don't wedge every shell command.
-    return INSTALL_RE.test(command)
-      ? block(`AgentShield could not run its scanner (${String(err)}); blocking unverified install to fail closed.`)
-      : null;
+    return failClosedIfInstall(command, `AgentShield could not run its scanner (${String(err)})`);
   }
 
   if (res && res.error) {
-    return INSTALL_RE.test(command)
-      ? block(`AgentShield CLI unavailable (${String(res.error)}); blocking unverified install to fail closed.`)
-      : null;
+    return failClosedIfInstall(command, `AgentShield CLI unavailable (${String(res.error)})`);
   }
 
-  const out = ((res && res.stdout) || "").trim();
-  if (out) {
-    // The CLI emitted a decision. It uses OpenClaw's shape: `{block:true,...}`
-    // for a block, empty for allow.
-    try {
-      const parsed = JSON.parse(out);
-      if (parsed && parsed.block === true) {
-        return block(
-          typeof parsed.blockReason === "string" && parsed.blockReason
-            ? parsed.blockReason
-            : "AgentShield blocked this command.",
-        );
-      }
-      // Explicit non-block JSON → allow.
-      return null;
-    } catch {
-      // Non-JSON stdout: fall through to the exit-status handling below.
-    }
+  const stdout = ((res && res.stdout) || "").trim();
+  const stderr = ((res && res.stderr) || "").trim();
+  const status = res ? res.status : null;
+
+  // BLOCK: guard-scan-cmd exits 1 and prints the blocked item(s) on stdout.
+  if (status === 1) {
+    return block(cleanReason(stdout) || "AgentShield blocked this command.");
   }
 
-  // `agentshield hook` ALWAYS exits 0 with the decision in stdout (empty=allow,
-  // JSON=block). A NON-zero exit therefore means the CLI itself failed — not a
-  // block verdict. Fail closed only for commands that look like installs, so a
-  // scanner crash never wedges innocuous commands like `ls`.
-  if (res && typeof res.status === "number" && res.status !== 0) {
-    if (INSTALL_RE.test(command)) {
-      const detail = out || (res.stderr || "").trim();
-      return block(
-        `AgentShield scanner failed (exit ${res.status}${detail ? `: ${detail.slice(0, 120)}` : ""}); blocking unverified install to fail closed.`,
-      );
-    }
-    return null;
+  // WARN → fail closed: guard-scan-cmd exits 0 but prints "flagged for review".
+  if (status === 0 && /flagged for review/i.test(stdout)) {
+    return block(
+      cleanReason(stdout) || "AgentShield flagged this command for review; blocking to fail closed.",
+    );
   }
 
-  // Exit 0 and no block payload → allow.
-  return null;
+  // Clean allow.
+  if (status === 0) return null;
+
+  // Any other exit code (e.g. 2 = CLI usage error / wrong build) means the CLI
+  // could not give a verdict. Fail closed only for install-looking commands so a
+  // CLI problem never wedges innocuous commands like `ls`.
+  return failClosedIfInstall(
+    command,
+    `AgentShield scanner returned exit ${status}${stderr ? `: ${stderr.slice(0, 120)}` : ""}`,
+  );
+}
+
+function failClosedIfInstall(command, why) {
+  return INSTALL_RE.test(command)
+    ? block(`${why}; blocking unverified install to fail closed.`)
+    : null;
+}
+
+/** Strip guard-scan-cmd's heading and bullet markup into a compact reason. */
+function cleanReason(stdout) {
+  return stdout
+    .split("\n")
+    .map((l) => l.replace(/^\s*[•*-]\s*/, "").trim())
+    .filter((l) => l && !/^AgentShield (BLOCKED|WARNING|: )/i.test(l) && !/^AgentShield:/i.test(l))
+    .join("; ")
+    .trim();
 }
 
 function block(blockReason) {
   return { block: true, blockReason };
 }
 
-/** Default runner: invoke `agentshield hook --agent openclaw` with a PreToolUse
- *  payload on stdin. Override in tests. */
-export function runAgentShield(command) {
+/** Default runner: invoke `agentshield guard-scan-cmd <tokens>`. Override in tests. */
+export function runAgentShield(tokens) {
   const bin = process.env.AGENTSHIELD_BIN || "agentshield";
-  const payload = JSON.stringify({ tool_input: { command } });
-  const res = spawnSync(bin, ["hook", "--agent", "openclaw"], {
-    input: payload,
+  const res = spawnSync(bin, ["guard-scan-cmd", ...tokens], {
     encoding: "utf8",
     timeout: 60_000,
   });

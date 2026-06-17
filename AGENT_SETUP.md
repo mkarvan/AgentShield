@@ -406,15 +406,18 @@ OpenClaw is a **TypeScript/Node** framework. AgentShield's OpenClaw integration 
 - The `agentshield` CLI on PATH in the OpenClaw box: `pipx install "agentshield @ git+https://github.com/mkarvan/AgentShield.git"` (or set `AGENTSHIELD_BIN` to its absolute path).
 - Node >= 22 (OpenClaw's requirement).
 
-**Install the plugin:**
+**Install the plugin** (as **root** — OpenClaw rejects non-root-owned plugin files):
 ```bash
 openclaw plugins install @agentshield/openclaw-plugin
-# or from a checkout of this repo:
+# or from a checkout of this repo (chown to root first):
+sudo chown -R root:root ./integrations/openclaw
 openclaw plugins install ./integrations/openclaw
 ```
-OpenClaw discovers the plugin via its `openclaw.plugin.json` manifest and calls its `register(api)`, which wires `api.on("before_tool_call", …)`.
+OpenClaw validates the plugin via its required `openclaw.plugin.json` manifest (which must include a `configSchema`), reads the entry point from `package.json`'s `openclaw.extensions`, then calls `register(api)`, which wires `api.on("before_tool_call", …)`. If you previously tried a broken install, clear it first: `openclaw plugins remove agentshield` (and `… remove @agentshield/openclaw-plugin`).
 
-**How interception works.** Before the `exec` tool runs, the hook reads `event.params.command`, passes it to `agentshield hook --agent openclaw`, and—if AgentShield blocks—returns `{ block: true, blockReason }` (terminal; `exec` never runs). `NEEDS_CONFIRMATION` fails closed to a block (OpenClaw hooks have no "ask"). The hook never throws; a missing/erroring scanner fails closed for install-looking commands and lets innocuous commands through.
+The plugin ships the required `openclaw.plugin.json` manifest (with a `configSchema` — OpenClaw refuses a manifest without one) and declares its entry in `package.json`'s `openclaw.extensions`. OpenClaw also refuses **non-root-owned** plugin files, so install as root or `chown -R root:root` the plugin directory.
+
+**How interception works.** Before the `exec` tool runs, the hook reads `event.params.command`, tokenizes it, and passes it to `agentshield guard-scan-cmd <tokens>` (exit 1 = block, exit 0 = allow; a "flagged for review" warn also blocks). If AgentShield blocks, the hook returns `{ block: true, blockReason }` (terminal; `exec` never runs). `NEEDS_CONFIRMATION` fails closed to a block (OpenClaw hooks have no "ask"). The hook never throws; a missing/erroring scanner fails closed for install-looking commands and lets innocuous commands through.
 
 **Verify (inside the OpenClaw box):**
 ```bash
@@ -862,7 +865,7 @@ If OSV is unreachable, check your network. The OSV bulk export URL is `https://o
 
 1. Confirm the `agentshield` CLI is on PATH **in the OpenClaw box** (the plugin shells out to it): `command -v agentshield`, or set `AGENTSHIELD_BIN` to its absolute path.
 2. Confirm OpenClaw loaded the plugin: `openclaw plugins list | grep -i agentshield`. If absent, `openclaw plugins install @agentshield/openclaw-plugin` (or `./integrations/openclaw`).
-3. Confirm the CLI verdict oracle works: `printf '{"tool_input":{"command":"pip install <known-bad>"}}' | agentshield hook --agent openclaw` should print `{"block": true, ...}`.
+3. Confirm the CLI verdict oracle works: `agentshield guard-scan-cmd pip install <known-bad>` should exit `1` and print the blocked item; a clean package exits `0`.
 4. Run the real-instance test: `./scripts/openclaw_realtest.sh` (drives the registered `before_tool_call` handler + the real CLI; FAILS if the hook never fires).
 5. Remember OpenClaw "skills" are prompt packs — interception is the **plugin** (`before_tool_call`), not a skill. Remove any old `module:`/`class:` skill entry.
 

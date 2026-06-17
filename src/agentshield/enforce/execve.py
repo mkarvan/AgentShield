@@ -29,6 +29,24 @@ Scope / caveats:
 
 The verdict logic is **not** reimplemented here; the injected library shells out
 to ``agentshield guard-scan-cmd`` so coverage and policy stay single-sourced.
+
+Fail-closed default
+-------------------
+For a *managed* binary, if the interceptor cannot obtain a verdict — allocation
+or ``fork`` failure, ``agentshield`` not found on ``PATH``, or the scanner child
+dying abnormally — it **blocks** the exec (``EACCES``) by default. Failing open
+here would silently defeat the absolute-path / PATH-reset layer, which is the
+whole reason this interceptor exists.
+
+Two environment variables tune this:
+
+* ``AGENTSHIELD_EXEC_FAIL_OPEN`` — **emergency override, off by default.** When
+  set, a managed binary whose scan could not run is *allowed* instead of blocked.
+  Both outcomes print a loud ``agentshield[exec]:`` diagnostic to stderr so the
+  bypass is never silent. Use only to unbreak a host where ``agentshield`` itself
+  is broken; unset it again immediately.
+* ``AGENTSHIELD_EXEC_DISABLE`` — set automatically inside the scanner subprocess
+  to prevent recursive interception; not intended for end users.
 """
 
 from __future__ import annotations
@@ -149,6 +167,29 @@ static int as_is_managed(const char *path) {
     return 0;
 }
 
+/* Verdict for a MANAGED binary when no scan result can be produced (alloc/fork
+ * failure, agentshield missing, or scanner killed). Default: FAIL-CLOSED (block,
+ * return 0) so the absolute-path / PATH-reset layer keeps its promise. Setting
+ * AGENTSHIELD_EXEC_FAIL_OPEN=1 switches to an explicit emergency mode that ALLOWS
+ * the install (return 1). Both branches emit a loud stderr diagnostic — the
+ * bypass is never silent. */
+static void as_warn(const char *s) {
+    if (s) { ssize_t r = write(2, s, strlen(s)); (void)r; }
+}
+
+static int as_fail_verdict(const char *why) {
+    as_warn("agentshield[exec]: scanner unavailable: ");
+    as_warn(why);
+    if (getenv("AGENTSHIELD_EXEC_FAIL_OPEN")) {
+        as_warn(" -- AGENTSHIELD_EXEC_FAIL_OPEN set: ALLOWING install "
+                "UNSCANNED (emergency mode)\n");
+        return 1; /* emergency fail-open: allow */
+    }
+    as_warn(" -- BLOCKING install (fail-closed). Set "
+            "AGENTSHIELD_EXEC_FAIL_OPEN=1 to override.\n");
+    return 0; /* fail closed: block */
+}
+
 /* Run `agentshield guard-scan-cmd <base> <args...>`; return 1 to allow, 0 block. */
 static int as_scan_ok(const char *path, char *const argv[]) {
     if (getenv("AGENTSHIELD_EXEC_DISABLE")) return 1;
@@ -166,7 +207,7 @@ static int as_scan_ok(const char *path, char *const argv[]) {
     /* Build: as_bin guard-scan-cmd base [argv[1..]] NULL */
     int n = argc + 3;
     char **cmd = (char **)calloc(n + 1, sizeof(char *));
-    if (!cmd) return 1; /* allocation failure: do not hard-fail the exec */
+    if (!cmd) return as_fail_verdict("calloc failure"); /* managed binary -> fail closed */
     int k = 0;
     cmd[k++] = (char *)as_bin;
     cmd[k++] = (char *)"guard-scan-cmd";
@@ -175,22 +216,23 @@ static int as_scan_ok(const char *path, char *const argv[]) {
     cmd[k] = NULL;
 
     pid_t pid = fork();
-    if (pid < 0) { free(cmd); return 1; }
+    if (pid < 0) { free(cmd); return as_fail_verdict("fork failure"); }
     if (pid == 0) {
         /* Avoid recursive interception inside the scanner subprocess. */
         setenv("AGENTSHIELD_EXEC_DISABLE", "1", 1);
         execvp(as_bin, cmd);
-        _exit(127); /* scanner missing: fail open so we don't brick the box */
+        _exit(127); /* could not exec agentshield; parent treats 127 as "scanner missing" */
     }
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     free(cmd);
     if (WIFEXITED(status)) {
         int rc = WEXITSTATUS(status);
-        if (rc == 127) return 1;      /* scanner not found -> allow */
-        return rc == 0 ? 1 : 0;       /* 0 allow, nonzero block */
+        if (rc == 127) return as_fail_verdict("agentshield not found on PATH");
+        return rc == 0 ? 1 : 0;       /* 0 allow, nonzero block (BLOCK or NEEDS_CONFIRMATION) */
     }
-    return 1;
+    /* Child did not exit normally (killed by a signal, etc.): no verdict. */
+    return as_fail_verdict("scan process terminated abnormally");
 }
 """
 

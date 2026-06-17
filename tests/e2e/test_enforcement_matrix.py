@@ -304,6 +304,54 @@ class TestExecveEnforcement:
         assert res.returncode == 0, res.stderr
         assert fake_env["marker"].read_text().count("RAN pip") == 1
 
+    def _run_abs_env(self, fake_env, so: Path, pip_path: Path, pkg: str, extra_env: dict):
+        env = {**os.environ, "LD_PRELOAD": str(so), **extra_env}
+        return subprocess.run(
+            ["bash", "-c", f'"{pip_path}" install {pkg}'],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_execve_fails_closed_when_scanner_missing(self, fake_env, tmp_path):
+        # Scanner unavailable (AGENTSHIELD_BIN points nowhere) must BLOCK a managed
+        # binary by default — the fail-closed promise for the absolute-path layer.
+        so = self._build(tmp_path)
+        pip_path = fake_env["realbin"] / "pip"
+        res = self._run_abs_env(
+            fake_env, so, pip_path, "requests", {"AGENTSHIELD_BIN": str(tmp_path / "nope")}
+        )
+        assert res.returncode != 0
+        assert not fake_env["marker"].exists(), "managed install ran despite missing scanner"
+        assert "fail-closed" in res.stderr.lower()
+
+    def test_execve_emergency_fail_open_env_allows(self, fake_env, tmp_path):
+        # The documented emergency override re-opens the gate, loudly.
+        so = self._build(tmp_path)
+        pip_path = fake_env["realbin"] / "pip"
+        res = self._run_abs_env(
+            fake_env,
+            so,
+            pip_path,
+            "requests",
+            {"AGENTSHIELD_BIN": str(tmp_path / "nope"), "AGENTSHIELD_EXEC_FAIL_OPEN": "1"},
+        )
+        assert res.returncode == 0, res.stderr
+        assert fake_env["marker"].read_text().count("RAN pip") == 1
+        assert "emergency mode" in res.stderr.lower()
+
+    def test_execve_unmanaged_binary_unaffected_when_scanner_missing(self, fake_env, tmp_path):
+        # Only managed entrypoints fail closed; an unrelated binary still runs.
+        so = self._build(tmp_path)
+        env = {**os.environ, "LD_PRELOAD": str(so), "AGENTSHIELD_BIN": str(tmp_path / "nope")}
+        res = subprocess.run(
+            ["bash", "-c", "/bin/echo hello-unmanaged"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert res.returncode == 0 and "hello-unmanaged" in res.stdout
+
 
 # ── proxy ─────────────────────────────────────────────────────────────────────
 
@@ -489,3 +537,35 @@ class TestExecveMacOS:
 
         line = execve.preload_env_line(Path("/opt/libagentshield_exec.dylib"))
         assert line.startswith("export DYLD_INSERT_LIBRARIES=")
+
+
+# ── execve fail-closed source generation (platform-independent) ───────────────
+
+
+class TestExecveFailClosedSource:
+    @pytest.mark.parametrize("target", ["Linux", "Darwin"])
+    def test_error_paths_route_through_fail_verdict(self, target):
+        from agentshield.enforce import execve
+
+        src = execve.c_source(target)
+        # The helper exists and is keyed on the emergency env var.
+        assert "as_fail_verdict" in src
+        assert "AGENTSHIELD_EXEC_FAIL_OPEN" in src
+        # Each unverifiable condition for a managed binary must fail closed via the
+        # helper rather than the old bare `return 1` (allow).
+        assert "calloc failure" in src  # allocation failure
+        assert 'as_fail_verdict("fork failure")' in src  # fork failure
+        assert "agentshield not found" in src  # scanner missing (rc 127)
+        assert "terminated abnormally" in src  # child killed / no WIFEXITED
+        # Regression guard: the old fail-open rationale must be gone.
+        assert "fail open so we don't brick" not in src
+        assert "scanner not found -> allow" not in src
+
+    def test_default_is_fail_closed_not_open(self):
+        from agentshield.enforce import execve
+
+        src = execve.c_source("Linux")
+        # Fail-open must be gated behind getenv(AGENTSHIELD_EXEC_FAIL_OPEN); the
+        # default branch returns 0 (block).
+        assert 'getenv("AGENTSHIELD_EXEC_FAIL_OPEN")' in src
+        assert "return 0; /* fail closed: block */" in src

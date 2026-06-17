@@ -6,9 +6,15 @@
 //
 // Verdicts come from the AgentShield CLI — the single source of truth for
 // scanning — via `agentshield guard-scan-cmd <command tokens>`:
-//   * exit 0, no "flagged for review" text  -> ALLOW
+//   * exit 0, no warning text               -> ALLOW (clean, or warn-only
+//                                              LOG_ASYNC which proceeds)
 //   * exit 1                                -> BLOCK (reason printed on stdout)
-//   * exit 0 with "flagged for review"      -> warn -> BLOCK (fail closed)
+//   * exit 2                                -> NEEDS_CONFIRMATION that could not
+//                                              be confirmed (no interactive TTY
+//                                              in the agent case) — fail closed;
+//                                              also covers CLI usage errors
+//   * exit 0 with "flagged for review"      -> a residual warn (e.g. syspkg CVE)
+//                                              -> BLOCK (fail closed)
 //   * any other exit / spawn error          -> CLI failure -> fail closed for
 //                                              install-looking commands only
 // `guard-scan-cmd` is the same backend the `agentshield guard` shell uses; it is
@@ -31,9 +37,16 @@ const COMMAND_KEYS = ["command", "cmd", "script"];
 
 /** Cheap pre-check: does this command plausibly install a package? Used only to
  *  decide whether a missing/erroring CLI should fail closed. The authoritative
- *  parse happens in the AgentShield CLI. */
+ *  parse happens in the AgentShield CLI; this mirrors the manager+verb forms the
+ *  Python registry (enforce/registry.py) recognises so a scanner-unavailable
+ *  fallback covers the same install surface.
+ *
+ *  The `-m\s*pip` alternative catches the `python -m pip install` family —
+ *  including the attached `python -mpip install` form (valid Python where the
+ *  module name abuts `-m`), which a plain `\bpip\b` left-boundary would miss and
+ *  thus let slip past a fail-closed fallback. */
 const INSTALL_RE =
-  /\b(pip3?|pipx|uv|poetry|conda|npm|yarn|pnpm|bun|cargo|gem|go|apt|apt-get|brew)\b[^\n;|&]*\b(install|add|i)\b/i;
+  /(?:\b(?:pip3?|pipx|uv|poetry|conda|npm|yarn|pnpm|bun|cargo|gem|go|apt-get|apt|brew)\b|-m\s*pip3?\b)[^\n;|&]*\b(?:install|add|i)\b/i;
 
 /** Extract the command string from an exec tool's params, or null. */
 export function extractCommand(params) {

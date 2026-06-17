@@ -1,8 +1,9 @@
 // Unit tests for the AgentShield OpenClaw plugin decision logic.
 // Run: node --test  (Node >= 22). No network, no OpenClaw runtime needed —
 // the AgentShield CLI is replaced by a fake runner that mimics
-// `agentshield guard-scan-cmd` (exit 1 = block, exit 0 = allow, exit 0 +
-// "flagged for review" = warn, exit 2 = CLI usage error).
+// `agentshield guard-scan-cmd` (exit 1 = BLOCK, exit 0 = allow / warn-only
+// LOG_ASYNC, exit 0 + "flagged for review" = residual warn, exit 2 =
+// NEEDS_CONFIRMATION fail-closed or CLI usage error).
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -154,4 +155,78 @@ test("spawn error on an install command FAILS CLOSED", () => {
 
 test("CLI throwing on a NON-install command does not wedge the shell", () => {
   assert.equal(evaluateToolCall("exec", { command: "ls -la" }, throwingRunner), null);
+});
+
+// ── scanner-unavailable fallback must cover the registry's install forms ──────
+// Regression for the audit finding: the fail-closed fallback previously missed
+// install forms the Python registry recognises (notably `python -m pip` and the
+// attached `python -mpip`), letting them proceed when the CLI could not run.
+
+const MISSED_INSTALL_FORMS = [
+  "python -m pip install evil",
+  "python3 -m pip install evil",
+  "python3.11 -m pip install evil",
+  "python -mpip install evil", // attached module name — valid Python
+  "python3 -mpip install evil",
+  "/usr/bin/python -m pip install evil",
+  "uv pip install evil",
+  "uv add evil",
+  "pipx install evil",
+  "poetry add evil",
+  "conda install evil",
+];
+
+for (const cmd of MISSED_INSTALL_FORMS) {
+  test(`fallback fails closed for install form: ${cmd}`, () => {
+    const d = evaluateToolCall("exec", { command: cmd }, throwingRunner);
+    assert.ok(d, `${cmd} slipped past the fail-closed fallback`);
+    assert.equal(d.block, true);
+  });
+  test(`fallback fails closed on spawn error for: ${cmd}`, () => {
+    const d = evaluateToolCall("exec", { command: cmd }, spawnErrorRunner);
+    assert.ok(d, `${cmd} slipped past the fail-closed fallback`);
+    assert.equal(d.block, true);
+  });
+}
+
+// Non-install commands that merely *contain* manager-ish substrings must NOT be
+// wedged when the scanner is down (no over-broad fail-closed).
+const NON_INSTALL_SAFE = [
+  "django manage.py migrate",
+  "go run main.go",
+  "cargo build",
+  "git add .",
+  "echo install instructions",
+  "npm run build",
+];
+
+for (const cmd of NON_INSTALL_SAFE) {
+  test(`fallback does not wedge non-install command: ${cmd}`, () => {
+    assert.equal(evaluateToolCall("exec", { command: cmd }, throwingRunner), null);
+  });
+}
+
+// NEEDS_CONFIRMATION now surfaces as exit 2 (fail-closed when non-interactive);
+// it must block an install but not a bystander command.
+const needsConfirmRunner = () => ({
+  status: 2,
+  stdout: "AgentShield: 1 item(s) require confirmation before install:\n  • sus: WARN_CONFIRM",
+  stderr: "",
+});
+
+test("NEEDS_CONFIRMATION (exit 2) on an install fails closed", () => {
+  const d = evaluateToolCall("exec", { command: "pip install sus" }, needsConfirmRunner);
+  assert.ok(d);
+  assert.equal(d.block, true);
+});
+
+// LOG_ASYNC is warn-only: exit 0 with no "flagged for review" text → proceed.
+const logAsyncRunner = () => ({
+  status: 0,
+  stdout: "AgentShield: 1 item(s) logged for async review — proceeding\n  • pkg: low-risk",
+  stderr: "",
+});
+
+test("LOG_ASYNC (exit 0, async review) is allowed to proceed", () => {
+  assert.equal(evaluateToolCall("exec", { command: "pip install pkg" }, logAsyncRunner), null);
 });

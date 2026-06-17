@@ -59,6 +59,14 @@ node --test
 ../../scripts/openclaw_realtest.sh
 ```
 
+> `openclaw_realtest.sh` auto-cleans prior agentshield installs before it
+> installs: it removes any stale `@agentshield-openclaw-plugin-*` extension dir
+> under `$OPENCLAW_HOME/extensions` (default `~/.openclaw`) and drops stale
+> `agentshield` / `@agentshield/openclaw-plugin` entries from `openclaw.json`,
+> clearing the "manifest requires configSchema" error left by an old install
+> (which `openclaw doctor --fix` won't remove). Only agentshield entries are
+> touched.
+
 ## Config
 
 Override the CLI path if `agentshield` is not on PATH:

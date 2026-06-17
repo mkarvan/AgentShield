@@ -34,6 +34,14 @@ one), run their checks, restore the config, and print a `PASS`/`FAIL` summary
 (non-zero exit on any failure). Optional model-driven end-to-ends are gated
 behind `HERMES_LLM_E2E=1` / `OPENCLAW_LLM_E2E=1`.
 
+`openclaw_realtest.sh` also **auto-cleans prior agentshield installs** before
+installing: it `rm -rf`s any stale `@agentshield-openclaw-plugin-*` extension dir
+under `$OPENCLAW_HOME/extensions` (default `~/.openclaw`) and drops stale
+`agentshield` / `@agentshield/openclaw-plugin` entries from `openclaw.json`. This
+clears the "config invalid: plugin manifest requires configSchema" failure left
+by an old manifest (which `openclaw doctor --fix` does not remove). It only ever
+touches agentshield-related dirs/entries.
+
 ## Validated end-to-end flow
 
 This is the exact sequence used to validate a clean run inside a real

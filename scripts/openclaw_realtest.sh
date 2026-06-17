@@ -35,6 +35,7 @@ export AGENTSHIELD_BIN
 BAD="${AGENTSHIELD_E2E_BAD:-agentshield-e2e-blocked-pkg}"
 GOOD="${AGENTSHIELD_E2E_GOOD:-agentshield-e2e-allowed-pkg}"
 CFG="$HOME/.config/agentshield/config.toml"
+OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
 
 pass=0
 fail=0
@@ -145,11 +146,80 @@ real_rc=$?
 hr
 if [ "$real_rc" -eq 0 ]; then ok "real handler dispatch (bad blocked, good allowed)"; else bad "real handler dispatch (exit $real_rc)"; fi
 
+# --- Purge stale agentshield debris from prior (broken) installs -------------
+# A previously-broken install can leave an extension dir whose OLD manifest lacks
+# `configSchema`. OpenClaw then rejects the whole plugin set with
+# "config invalid: plugin manifest requires configSchema", and `openclaw doctor
+# --fix` does NOT remove it — the dir must be physically deleted and the stale
+# entry dropped from openclaw.json. We purge ONLY agentshield-related extension
+# dirs and entries here; other plugins are never touched. Idempotent.
+purge_agentshield_debris() {
+  ext_dir="$OPENCLAW_HOME/extensions"
+  if [ -d "$ext_dir" ]; then
+    # @agentshield-openclaw-plugin-<hash>/ and any old agentshield-id dirs.
+    for d in "$ext_dir"/@agentshield-openclaw-plugin-* "$ext_dir"/@agentshield-openclaw-plugin \
+             "$ext_dir"/agentshield-* "$ext_dir"/agentshield; do
+      [ -e "$d" ] || continue
+      rm -rf "$d" 2>/dev/null && echo "  CLEAN removed stale extension dir: $d"
+    done
+  fi
+
+  cfg="$OPENCLAW_HOME/openclaw.json"
+  if [ -f "$cfg" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+      if python3 - "$cfg" <<'PY'
+import json, sys
+p = sys.argv[1]
+STALE = {"agentshield", "@agentshield/openclaw-plugin"}
+try:
+    with open(p) as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(1)  # unreadable/not-json: leave it alone
+plugins = data.get("plugins")
+if not isinstance(plugins, dict):
+    sys.exit(1)
+entries = plugins.get("entries")
+changed = False
+if isinstance(entries, list):
+    kept = []
+    for e in entries:
+        eid = (e.get("id") or e.get("name")) if isinstance(e, dict) else e
+        if eid in STALE:
+            changed = True
+        else:
+            kept.append(e)
+    if changed:
+        plugins["entries"] = kept
+elif isinstance(entries, dict):
+    for k in list(entries):
+        if k in STALE:
+            del entries[k]
+            changed = True
+if not changed:
+    sys.exit(1)  # nothing agentshield-related to remove
+with open(p, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+sys.exit(0)
+PY
+      then
+        echo "  CLEAN pruned stale agentshield entries from $cfg"
+      fi
+    else
+      echo "  NOTE  python3 absent; cannot prune stale agentshield entries from $cfg (delete them manually if a stale install blocks validation)."
+    fi
+  fi
+}
+
 # --- 3. Best-effort: install into OpenClaw and confirm its loader lists it ----
 # OpenClaw refuses to load plugin files that are not root-owned. If we can become
-# root, chown the plugin tree and (re)install through OpenClaw's own loader,
-# clearing any stale entry from a previous (broken) attempt first.
+# root, chown the plugin tree and (re)install through OpenClaw's own loader. We
+# first physically purge any agentshield debris from prior broken installs (a
+# stale extension dir with a configSchema-less manifest blocks validation), then
+# clear any stale registry entry, then install.
 if command -v openclaw >/dev/null 2>&1; then
+  purge_agentshield_debris
   CHOWN=""
   if [ "$(id -u)" = "0" ]; then CHOWN="chown"; elif command -v sudo >/dev/null 2>&1; then CHOWN="sudo chown"; fi
   if [ -n "$CHOWN" ]; then

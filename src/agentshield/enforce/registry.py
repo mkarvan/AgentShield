@@ -58,6 +58,14 @@ from agentshield.core.models import Ecosystem
 # ── token-level helpers (shared by every layer) ───────────────────────────────
 
 # Flags that consume the following token as their value when written without ``=``.
+#
+# IMPORTANT: only list flags that genuinely take a value. A *boolean* flag listed
+# here makes the tokenizer swallow the following token (the package name!), which
+# silently hides the install from scanning — e.g. ``npm install --save-exact lodash``
+# would parse to zero packages. Boolean npm/yarn/pnpm/bun flags such as
+# ``--save-exact``/``-E``, ``--save-dev``/``-D``, ``--save-optional``/``-O``,
+# ``--save-prod``/``-P``, ``--global``/``-g``, ``--save-peer`` and ``--no-save``
+# must therefore NOT appear here.
 VALUE_FLAGS: frozenset[str] = frozenset(
     {
         # pip / pip3 / uv pip / pipx
@@ -98,7 +106,6 @@ VALUE_FLAGS: frozenset[str] = frozenset(
         "--scope",
         "-w",
         "--workspace",
-        "--save-exact",
         "--cwd",
         # cargo / poetry
         "--version",

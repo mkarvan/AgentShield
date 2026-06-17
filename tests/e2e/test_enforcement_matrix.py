@@ -107,6 +107,69 @@ def test_registry_parse_argv_negatives(argv):
     assert registry.parse_argv(argv) is None
 
 
+# ── boolean install flags must not swallow the package name ───────────────────
+# Regression for the audit finding: a boolean flag wrongly listed in VALUE_FLAGS
+# makes the tokenizer skip the *following* token (the package), so the install is
+# parsed as zero packages and silently bypasses scanning.
+
+# (command, manager, ecosystem value, expected packages)
+_BOOLEAN_FLAG_MATRIX = [
+    # npm boolean flags (long + short) — the package must survive in every spot.
+    ("npm install --save-exact lodash", "npm", "npm", ["lodash"]),
+    ("npm install -E lodash", "npm", "npm", ["lodash"]),
+    ("npm install --save-dev typescript", "npm", "npm", ["typescript"]),
+    ("npm install -D typescript", "npm", "npm", ["typescript"]),
+    ("npm install --save-optional left-pad", "npm", "npm", ["left-pad"]),
+    ("npm install -O left-pad", "npm", "npm", ["left-pad"]),
+    ("npm install --save-prod express", "npm", "npm", ["express"]),
+    ("npm install -P express", "npm", "npm", ["express"]),
+    ("npm install --global typescript", "npm", "npm", ["typescript"]),
+    ("npm install -g typescript", "npm", "npm", ["typescript"]),
+    ("npm install --no-save lodash", "npm", "npm", ["lodash"]),
+    ("npm install --save-exact --save-dev lodash", "npm", "npm", ["lodash"]),
+    # yarn / pnpm / bun equivalents.
+    ("yarn add --exact react", "yarn", "npm", ["react"]),
+    ("yarn add --dev react", "yarn", "npm", ["react"]),
+    ("pnpm add --save-exact vue", "pnpm", "npm", ["vue"]),
+    ("pnpm add --save-dev vue", "pnpm", "npm", ["vue"]),
+    ("pnpm add -D vue", "pnpm", "npm", ["vue"]),
+    ("bun add --exact hono", "bun", "npm", ["hono"]),
+    ("bun add --dev hono", "bun", "npm", ["hono"]),
+    # pip boolean flags must likewise not eat the package.
+    ("pip install --user requests", "pip", "pypi", ["requests"]),
+    ("pip install --upgrade requests", "pip", "pypi", ["requests"]),
+    ("pip install --no-deps requests", "pip", "pypi", ["requests"]),
+]
+
+
+@pytest.mark.parametrize("command,manager,eco,packages", _BOOLEAN_FLAG_MATRIX)
+def test_boolean_flags_do_not_swallow_package_parse_command(command, manager, eco, packages):
+    installs = registry.parse_command(command)
+    assert len(installs) == 1, f"{command!r} -> {installs}"
+    inst = installs[0]
+    assert inst.manager == manager
+    assert (inst.ecosystem.value if inst.ecosystem else None) == eco
+    assert inst.packages == packages, f"{command!r} dropped the package -> bypass"
+
+
+@pytest.mark.parametrize("command,manager,eco,packages", _BOOLEAN_FLAG_MATRIX)
+def test_boolean_flags_do_not_swallow_package_parse_argv(command, manager, eco, packages):
+    inst = registry.parse_argv(command.split())
+    assert inst is not None, f"{command!r} not recognised as an install"
+    assert inst.manager == manager
+    assert inst.packages == packages, f"{command!r} dropped the package -> bypass"
+
+
+def test_value_flags_still_consume_their_value():
+    # The fix must not over-correct: genuine value flags must keep consuming the
+    # following token, so a registry URL is never mistaken for a package.
+    installs = registry.parse_command("npm install --registry https://r.example lodash")
+    assert len(installs) == 1
+    assert installs[0].packages == ["lodash"]
+    installs = registry.parse_command("pip install -i https://pypi.example/simple requests")
+    assert installs[0].packages == ["requests"]
+
+
 # ── shim / execve fixtures ────────────────────────────────────────────────────
 
 _SENTINEL = "evil-pkg"

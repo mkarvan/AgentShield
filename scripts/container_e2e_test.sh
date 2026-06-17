@@ -6,7 +6,10 @@
 # be run INSIDE the alpine/arm64 container that has AgentShield
 # installed, e.g.:
 #
-#     container exec <container-id> sh < ~/Downloads/AgentShield/scripts/container_e2e_test.sh
+#     container exec -i <container-id> sh < ~/Downloads/AgentShield/scripts/container_e2e_test.sh
+#
+# The -i flag is REQUIRED: the script is piped to `sh` over stdin, and without it
+# the exec'd shell gets no stdin and exits silently (no output, looks like a hang).
 #
 # It exercises every AgentShield enforcement surface with a known-bad "sentinel"
 # package (which must BLOCK) and a known-good package (which must ALLOW), grading

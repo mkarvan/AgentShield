@@ -22,7 +22,7 @@
 #
 # Usage:
 #   sh scripts/container_install_deps.sh                 # run inside the container
-#   container exec <id> sh < scripts/container_install_deps.sh
+#   container exec -i <id> sh < scripts/container_install_deps.sh   # -i is REQUIRED when piping over stdin
 #
 # Notes:
 #   * Idempotent — already-present tools are skipped.

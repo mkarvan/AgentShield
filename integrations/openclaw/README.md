@@ -44,8 +44,9 @@ openclaw plugins install @agentshield/openclaw-plugin
 # or from a checkout (chown to root first):
 sudo chown -R root:root ./integrations/openclaw
 openclaw plugins install ./integrations/openclaw
-# clear a prior broken install if needed:
+# clear a prior broken install / stale plugin config entry first if needed:
 #   openclaw plugins remove agentshield
+#   openclaw plugins remove @agentshield/openclaw-plugin
 ```
 
 ## Test

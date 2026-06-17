@@ -644,9 +644,10 @@ AgentShield is a **real Hermes plugin**: a `register(ctx)` entry point that wire
 
 > Hermes has no `before_tool_call`/`ToolPlugin` contract and no structured `pip_install` tool — earlier `module:`/`class:` registration never fired. If you have that anywhere (including in a skill file), remove it.
 
-**Install** (into the interpreter Hermes runs from, e.g. `~/.hermes/venv`):
+**Install** the `agentshield[hermes]` extra **into Hermes's own venv/interpreter** (e.g. `~/.hermes/venv`) — *not* a separate environment. This is the single most common mistake: a plugin installed in a different venv than Hermes uses can't be imported by Hermes's loader, so the guard never registers.
 ```bash
-pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
+# run this against the same interpreter Hermes launches from:
+~/.hermes/venv/bin/python -m pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
 **Register** — enable the pip entry-point in `~/.hermes/config.yaml`:
@@ -1633,11 +1634,25 @@ NVD_API_KEY=... GITHUB_TOKEN=ghp_... pytest tests/integration/ -v -m integration
 
 ### Changes to enforcement layers
 
-If your change touches a runtime enforcement surface (the Hermes plugin / OpenClaw Node plugin
-plugins, the Claude Code / Codex `agentshield hook`, `guard-scan-cmd`, the PATH
-shim, the `LD_PRELOAD` execve interceptor, or the index proxy), also run the
+If your change touches a runtime enforcement surface (the Hermes plugin, the
+OpenClaw Node plugin, the Claude Code / Codex `agentshield hook`, `guard-scan-cmd`,
+the PATH shim, the `LD_PRELOAD` execve interceptor, or the index proxy), also run the
 container harness described in [Testing](#testing) against a provisioned
 container and confirm a clean `ALL GRADED CHECKS PASSED` run before submitting.
+
+For the two framework plugins, also run the **real-instance** scripts against a
+live agent box — these catch the "plugin loaded but the hook never fired" failure
+that the container harness cannot:
+
+- **Hermes:** `HERMES_PY=~/.hermes/venv/bin/python ./scripts/hermes_realtest.sh`
+  (set `HERMES_PY` to Hermes's own interpreter). It loads the plugin through
+  Hermes's real loader and drives its `get_pre_tool_call_block_message`
+  enforcement; a PASS blocks the bad install and allows the good one, and it
+  **FAILS if the `pre_tool_call` hook never fires**.
+- **OpenClaw:** `./scripts/openclaw_realtest.sh` (POSIX sh; handles the
+  `chown -R root:root` requirement when run as root). It drives the registered
+  `before_tool_call` handler plus the real `agentshield guard-scan-cmd` oracle,
+  and **FAILS if the hook never fires**.
 
 ### Test structure
 

@@ -310,27 +310,21 @@ Choose the section that matches your framework. If your framework is not listed,
 
 AgentShield is a **real Hermes plugin**: a `register(ctx)` entry point that wires a `pre_tool_call` hook. (Hermes has no `before_tool_call`/`ToolPlugin` contract and no structured `pip_install` tool — installs run through the `terminal` tool — so the old `module:`/`class:` registration never fired. If you have that in a config or skill file, delete it.)
 
-Register it one of two ways.
-
-**Option A — pip entry-point (recommended).** Installing `agentshield[hermes]` exposes a `hermes_agent.plugins` entry-point named `agentshield`. Just enable it in `~/.hermes/config.yaml`:
-
-```yaml
-plugins:
-  enabled:
-    - agentshield
-```
-
-**Option B — drop-in plugin directory.** Copy the bundled plugin dir and enable it:
+**Register it as a directory plugin.** `hermes-agent` (verified on 0.17.x) discovers plugins **only** as directories under `~/.hermes/plugins/<name>/` (or project-local `./.hermes/plugins/<name>/`) — each with a `plugin.yaml` manifest and an `__init__.py` exposing `register(ctx)`. It does **not** scan Python pip entry points, so simply listing `agentshield` under `plugins.enabled` without the directory present does nothing (`hermes plugins list` stays empty). Copy the bundled plugin dir, then enable it:
 
 ```bash
 cp -r examples/hermes-plugin ~/.hermes/plugins/agentshield
+hermes plugins enable agentshield        # or hand-edit config.yaml (below)
 ```
+
 ```yaml
-# ~/.hermes/config.yaml
+# ~/.hermes/config.yaml — `hermes plugins enable` writes this for you
 plugins:
   enabled:
     - agentshield
 ```
+
+The plugin is matched by its directory name / manifest `name` (`agentshield`), so the `plugins.enabled` entry must read exactly `agentshield`.
 
 (Optional) point the plugin at a specific AgentShield config:
 
@@ -343,7 +337,13 @@ plugins:
       config_path: ~/.config/agentshield/config.toml
 ```
 
-**Restart Hermes.** Confirm it loaded with `/plugins` (you should see `agentshield`), and check the startup log for `AgentShield: registered 'pre_tool_call' guard (intercepting: …)`. If instead you see `this Hermes build exposes no 'register_hook' API`, the plugin self-verify is telling you in-band enforcement is inactive — fall back to `agentshield guard` (see below).
+> **Note on the pip entry point.** `pyproject.toml` also declares a
+> `hermes_agent.plugins` entry point. That's a forward-compat hook for builds
+> that discover plugins via entry points; **hermes-agent 0.17.x does not use it**
+> — use the directory install above. (If a future Hermes adds entry-point
+> discovery, the same `register(ctx)` will be picked up automatically.)
+
+**Restart Hermes.** Confirm it loaded with `hermes plugins list` / `/plugins` (you should see `agentshield`), and check the startup log for `AgentShield: registered 'pre_tool_call' guard (intercepting: …)`. If instead you see `this Hermes build exposes no 'register_hook' API`, the plugin self-verify is telling you in-band enforcement is inactive — fall back to `agentshield guard` (see below).
 
 #### How interception works
 
@@ -856,7 +856,7 @@ If OSV is unreachable, check your network. The OSV bulk export URL is `https://o
 
 2. Check that `agentshield[hermes]` was installed into that same interpreter (not just `agentshield`, and not into a different venv).
 
-3. Confirm the plugin is **enabled**: `agentshield` must appear under `plugins.enabled` in `~/.hermes/config.yaml`, and `/plugins` in a running session must list it. **Delete any old `module:`/`class:` plugin entry** (including ones embedded in skill files) — that form never wired the hook.
+3. Confirm the plugin **directory exists and is enabled**. hermes-agent 0.17.x only loads *directory* plugins, so `~/.hermes/plugins/agentshield/plugin.yaml` (+ `__init__.py`) must be present **and** `agentshield` must appear under `plugins.enabled` — enabling it in config without the directory does nothing (`hermes plugins list` stays empty). If the dir is missing, run `cp -r examples/hermes-plugin ~/.hermes/plugins/agentshield`. Listing it under `plugins.enabled` but relying on the pip entry point is the most common mistake — that entry point is not scanned by 0.17.x. **Delete any old `module:`/`class:` plugin entry** (including ones embedded in skill files) — that form never wired the hook.
 
 4. Check the startup log fired the self-verify line:
    ```bash

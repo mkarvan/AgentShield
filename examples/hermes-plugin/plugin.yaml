@@ -1,14 +1,24 @@
-# AgentShield — Hermes plugin manifest.
+# AgentShield — Hermes directory-plugin manifest.
 #
-# Install (directory plugin):
+# hermes-agent (0.17.x) discovers *directory* plugins only — it does NOT scan
+# pip entry points. A plugin is a directory under one of:
+#   - ~/.hermes/plugins/<name>/            (user)
+#   - ./.hermes/plugins/<name>/            (project, opt-in)
+# containing this plugin.yaml + an __init__.py that exposes register(ctx).
+#
+# Install:
 #   1. pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
 #      (into the SAME interpreter Hermes runs from — e.g. ~/.hermes/venv)
 #   2. cp -r examples/hermes-plugin ~/.hermes/plugins/agentshield
-#   3. add `agentshield` to `plugins.enabled` in ~/.hermes/config.yaml
-#   4. restart Hermes; confirm with `/plugins`
+#   3. hermes plugins enable agentshield     # or add `agentshield` to plugins.enabled
+#   4. restart Hermes; confirm with `hermes plugins list` (or `/plugins`)
 #
-# This manifest's __init__.py simply re-exports AgentShield's register(ctx),
-# which wires a `pre_tool_call` hook that scans installs before they run.
+# The __init__.py re-exports AgentShield's register(ctx), which wires the
+# `pre_tool_call` hook (declared below) to scan installs before any terminal
+# tool runs and block unsafe ones. Fail-closed.
 name: agentshield
 version: "0.9.0"
 description: Scans package installs (pip/npm/cargo/...) before any terminal tool runs; blocks unsafe ones. Fail-closed.
+author: AgentShield
+hooks:
+  - pre_tool_call

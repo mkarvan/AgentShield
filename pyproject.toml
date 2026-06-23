@@ -64,10 +64,12 @@ dev = [
 [project.scripts]
 agentshield = "agentshield.cli:app"
 
-# Hermes (NousResearch hermes-agent) discovers pip-installed plugins via this
-# entry-point group. The target module exposes ``register(ctx)``, which wires the
-# ``pre_tool_call`` guard. Enable it with ``plugins.enabled: [agentshield]`` in
-# ``~/.hermes/config.yaml`` after installing ``agentshield[hermes]``.
+# Forward-compat entry point. NOTE: hermes-agent 0.17.x does NOT discover plugins
+# via pip entry points — it loads *directory* plugins from ~/.hermes/plugins/<name>/
+# (a plugin.yaml manifest + __init__.py exposing register(ctx)); see
+# examples/hermes-plugin/ and AGENT_SETUP.md for the supported install. This entry
+# point is retained only so a future Hermes that adds entry-point discovery would
+# pick up the same register(ctx) automatically.
 [project.entry-points."hermes_agent.plugins"]
 agentshield = "agentshield.integrations.hermes"
 

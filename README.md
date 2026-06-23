@@ -652,13 +652,12 @@ AgentShield is a **real Hermes plugin**: a `register(ctx)` entry point that wire
 ~/.hermes/venv/bin/python -m pip install "agentshield[hermes] @ git+https://github.com/mkarvan/AgentShield.git"
 ```
 
-**Register** — enable the pip entry-point in `~/.hermes/config.yaml`:
-```yaml
-plugins:
-  enabled:
-    - agentshield
+**Register** — hermes-agent (0.17.x) loads **directory** plugins only (it does *not* scan pip entry points), so install the bundled plugin dir and enable it:
+```bash
+cp -r examples/hermes-plugin ~/.hermes/plugins/agentshield
+hermes plugins enable agentshield     # or add `agentshield` to plugins.enabled in ~/.hermes/config.yaml
 ```
-…or drop in the bundled directory plugin: `cp -r examples/hermes-plugin ~/.hermes/plugins/agentshield` then enable it the same way. Restart Hermes and confirm with `/plugins` and the log line `AgentShield: registered 'pre_tool_call' guard`.
+Just listing `agentshield` under `plugins.enabled` **without** the `~/.hermes/plugins/agentshield/` directory does nothing (`hermes plugins list` stays empty). Restart Hermes and confirm with `hermes plugins list` / `/plugins` and the log line `AgentShield: registered 'pre_tool_call' guard`. (`pyproject.toml` also ships a `hermes_agent.plugins` entry point for forward-compat with a future entry-point-discovering Hermes; 0.17.x ignores it.)
 
 **Decision mapping** (`pre_tool_call` supports allow-or-block only):
 

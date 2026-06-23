@@ -840,13 +840,19 @@ Claude Code's (and OpenAI Codex's) `PreToolUse` hook invokes `agentshield hook` 
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "agentshield hook --agent codex" }
+          {
+            "type": "command",
+            "command": "agentshield hook --agent codex",
+            "statusMessage": "AgentShield: scanning install"
+          }
         ]
       }
     ]
   }
 }
 ```
+
+Codex's `hooks.json` has no per-hook `name` field, so it auto-labels unnamed handlers `hook1`, `hook2`, …; the `statusMessage` above is the schema-supported way to make the hook identifiable in the TUI (don't add a `"name"` key — Codex rejects it).
 
 Decision mapping: BLOCK → `permissionDecision: "deny"`; warn → `"ask"` on Claude Code (the user is prompted) / `"deny"` on Codex (which does not yet honor `"ask"`, so it fails closed); clean → exit 0 with no output (the command proceeds). Anything that can't be verified (shell expansion, VCS URLs, remote requirements files, `gem`/`go`, untrusted conda channels, scanner errors) fails closed and is denied. See [AGENT_SETUP.md](AGENT_SETUP.md) for the full setup and the Codex enforcement-scope caveats.
 

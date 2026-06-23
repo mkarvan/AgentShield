@@ -557,13 +557,19 @@ Then add to `~/.codex/hooks.json` (or `<repo>/.codex/hooks.json`):
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "agentshield hook --agent codex" }
+          {
+            "type": "command",
+            "command": "agentshield hook --agent codex",
+            "statusMessage": "AgentShield: scanning install"
+          }
         ]
       }
     ]
   }
 }
 ```
+
+> **Why the hook shows up as `hook1` (and how to label it).** Codex's `hooks.json` schema has **no per-hook `name`/`id` field** — a handler object only takes `type`, `command`, `timeout`/`timeoutSec`, and `statusMessage`. Codex therefore auto-labels unnamed handlers by position (`hook1`, `hook2`, …), which is why an earlier minimal config registered as `hook1`. There is no key that renames it to `agentshield`; the supported, schema-correct way to make it identifiable in the Codex TUI is the **`statusMessage`** field shown above (it appears while the hook runs). Don't add a `"name"` field — Codex would reject the config.
 
 **Caveats (honest scope).** Codex hooks are experimental and Windows is unsupported. Codex's `PreToolUse` only intercepts "simple" Bash tool calls — a model can still bypass it by writing a script to disk and running that — so treat this as a useful guardrail, not a hard enforcement boundary. For stronger enforcement, combine it with the PATH shim / `execve` interceptor / index proxy, or the MCP server.
 
@@ -695,12 +701,20 @@ Expected: `{"jsonrpc":"2.0","id":1,"result":{"pong":true}}`
 
 **Note on authentication:** On Linux and macOS the server uses peer credential checks (same UID) automatically — `nc` will work without any special handshake. On other platforms a shared-secret token is written to `~/.agentshield/ipc.token` (mode 0o600); clients must send `AUTH <token>\n` before the first JSON-RPC message.
 
-**6f. Manifest file scan:**
+**6f. Manifest file scan (happy path — should ALLOW):**
 ```bash
-echo -e "requests\nflask" > /tmp/test-req.txt
+printf 'requests==2.32.3\nflask==3.0.3\n' > /tmp/test-req.txt
 agentshield scan-file /tmp/test-req.txt
 ```
-Expected: A Rich summary table listing `requests` and `flask`, each with their scan status (ALLOW or findings). Exit code 0 if neither is blocked.
+Expected: a Rich summary table listing `requests` and `flask` both as **ALLOW**, `Blocked: 0`, exit code 0.
+
+> **Pin your versions.** Use pinned versions (`requests==2.32.3`), not bare names (`requests`). With a bare name AgentShield has no version to check against, so it evaluates advisories across *all* historical versions of the package — that frequently surfaces an old CRITICAL CVE and the package is **BLOCKED**, even though the current release is clean. Pinning makes the scan version-specific (the registries filter advisories by the exact version), which is also what a real lockfile/manifest does. The pins above are recent patched releases with no blocking advisories.
+
+**6g. Confirm blocking works (this one *should* BLOCK):**
+```bash
+agentshield scan python-dateutils --ecosystem pypi
+```
+Expected: **BLOCK**, exit code 1, with a `T1.1 [CRITICAL] Known-malicious package` finding. `python-dateutils` is a real typosquat of `python-dateutil` and ships in AgentShield's curated malicious-package database, so this blocks deterministically — even offline (`--offline`) and without API keys. Seeing this block confirms the response engine is wired correctly.
 
 ---
 

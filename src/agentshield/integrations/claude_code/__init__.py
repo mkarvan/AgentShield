@@ -49,13 +49,17 @@ Configuration (Claude Code — ``.claude/settings.json``)::
     }
 
 Configuration (Codex — ``~/.codex/hooks.json``; requires ``codex_hooks = true``
-under ``[features]`` in ``config.toml``)::
+under ``[features]`` in ``config.toml``).  Codex's hooks schema has no per-hook
+``name`` field — it auto-labels unnamed handlers ``hook1``/``hook2``; use
+``statusMessage`` to make the hook identifiable in the TUI::
 
     {
       "hooks": {
         "PreToolUse": [
           {"matcher": "Bash",
-           "hooks": [{"type": "command", "command": "agentshield hook --agent codex"}]}
+           "hooks": [{"type": "command",
+                      "command": "agentshield hook --agent codex",
+                      "statusMessage": "AgentShield: scanning install"}]}
         ]
       }
     }

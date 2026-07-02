@@ -63,7 +63,8 @@ class RateLimiter:
         self._config = config
 
     async def _connect(self) -> aiosqlite.Connection:
-        from agentshield.core.cache import CacheConfig, ScanCache
+        from agentshield.core.cache import ScanCache
+        from agentshield.core.config import CacheConfig
 
         # ScanCache owns the schema; reuse it so the tables always exist.
         cache = ScanCache(CacheConfig(db_path=self._db_path))

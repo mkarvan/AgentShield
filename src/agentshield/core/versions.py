@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ def _in_interval(
     return True  # introduced with no upper bound — affected from there on
 
 
-def version_in_osv_ranges(version: str, ranges: list[dict] | str | None) -> bool | None:
+def version_in_osv_ranges(version: str, ranges: list[dict[str, Any]] | str | None) -> bool | None:
     """Check *version* against OSV ``ranges`` (list of ``{"type", "events"}``).
 
     *ranges* may be the JSON string stored in ``cve_mirror.affected_versions``.

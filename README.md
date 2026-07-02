@@ -1423,6 +1423,11 @@ Offline scans query only:
 - `malicious_packages` table
 - In-process typosquatting checker (no network)
 
+When the scan pins a version (`pkg==1.2.3`), mirrored advisories are filtered
+against their stored affected-version ranges: advisories that confidently do
+not affect the pinned version are dropped. Unpinned scans and advisories whose
+ranges cannot be parsed are still reported (fail toward reporting).
+
 Target latency: < 50 ms. Static analysis (`--deep`) is unavailable offline.
 
 ---

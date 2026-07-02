@@ -101,6 +101,54 @@ async def test_query_cve_mirror_empty(tmp_path: Path):
     assert findings == []
 
 
+@pytest.mark.asyncio
+async def test_query_cve_mirror_filters_by_pinned_version(tmp_path: Path):
+    """Regression: the offline mirror used to report every CVE ever recorded for
+    a package, even when the pinned version is outside the affected range."""
+    import json
+
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import CacheConfig
+
+    db_path = tmp_path / "test.db"
+    cache = ScanCache(CacheConfig(db_path=db_path))
+    ranges = json.dumps(
+        [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "2.28.1"}]}]
+    )
+    await cache.upsert_cve(
+        "CVE-2024-RANGED", "requests", "pypi", ranges, "HIGH", 7.5, "Fixed in 2.28.1"
+    )
+
+    # Pinned to a fixed version → confidently not affected → no finding.
+    req_fixed = ScanRequest(package="requests", version="2.31.0", ecosystem=Ecosystem.PYPI)
+    assert await _query_cve_mirror(req_fixed, db_path) == []
+
+    # Pinned inside the affected range → finding reported.
+    req_vuln = ScanRequest(package="requests", version="2.27.0", ecosystem=Ecosystem.PYPI)
+    findings = await _query_cve_mirror(req_vuln, db_path)
+    assert [f.rule_id for f in findings] == ["CVE-2024-RANGED"]
+
+    # No version pinned → cannot filter → finding reported.
+    req_any = ScanRequest(package="requests", ecosystem=Ecosystem.PYPI)
+    findings = await _query_cve_mirror(req_any, db_path)
+    assert [f.rule_id for f in findings] == ["CVE-2024-RANGED"]
+
+
+@pytest.mark.asyncio
+async def test_query_cve_mirror_keeps_finding_when_ranges_unparseable(tmp_path: Path):
+    """Fail toward reporting: bad/absent range data must not drop the finding."""
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import CacheConfig
+
+    db_path = tmp_path / "test.db"
+    cache = ScanCache(CacheConfig(db_path=db_path))
+    await cache.upsert_cve("CVE-2024-NORANGE", "requests", "pypi", "[]", "HIGH", None, "No ranges")
+
+    req = ScanRequest(package="requests", version="99.0", ecosystem=Ecosystem.PYPI)
+    findings = await _query_cve_mirror(req, db_path)
+    assert [f.rule_id for f in findings] == ["CVE-2024-NORANGE"]
+
+
 # ── Offline scan full flow ─────────────────────────────────────────────────────────
 
 

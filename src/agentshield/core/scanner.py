@@ -440,15 +440,26 @@ class AgentShield:
 
 
 async def _query_cve_mirror(request: ScanRequest, db_path: Path) -> list[Finding]:
-    """Query the local cve_mirror table for offline CVE lookups."""
+    """Query the local cve_mirror table for offline CVE lookups.
+
+    When the request pins a version, each mirrored advisory's stored
+    ``affected_versions`` ranges are consulted: advisories that *confidently*
+    do not affect the pinned version are dropped. Unparseable versions or
+    ranges fail toward reporting (the finding is kept).
+    """
     from agentshield.core.cache import ScanCache
     from agentshield.core.config import CacheConfig
+    from agentshield.core.versions import version_in_osv_ranges
 
     cache = ScanCache(CacheConfig(db_path=db_path))
     rows = await cache.query_cve_mirror(request.package, request.ecosystem.value)
 
     findings: list[Finding] = []
     for row in rows:
+        if request.version:
+            affected = version_in_osv_ranges(request.version, row.get("affected_versions"))
+            if affected is False:
+                continue  # confidently not affected at this pinned version
         sev = _SEV_MAP.get(row.get("severity", ""), Severity.MEDIUM)
         findings.append(
             Finding(

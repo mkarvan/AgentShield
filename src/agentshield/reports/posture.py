@@ -114,12 +114,19 @@ async def _package_summary_from_local_db(
     db_path: Path,
 ) -> PackageSummary:
     """Build a PackageSummary for one package using only the local SQLite cache."""
+    from agentshield.core.versions import version_in_osv_ranges
+
     cache = ScanCache(CacheConfig(db_path=db_path))
     findings: list[Finding] = []
 
-    # CVE mirror lookup
+    # CVE mirror lookup — filtered by the installed version so advisories that
+    # confidently do not affect it are not reported.
     rows = await cache.query_cve_mirror(name, "pypi")
     for row in rows:
+        if version:
+            affected = version_in_osv_ranges(version, row.get("affected_versions"))
+            if affected is False:
+                continue
         sev = _SEV_MAP.get(row.get("severity", ""), Severity.MEDIUM)
         findings.append(
             Finding(

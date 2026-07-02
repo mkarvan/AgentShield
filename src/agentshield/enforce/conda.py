@@ -49,9 +49,11 @@ TRUSTED_CHANNELS: frozenset[str] = frozenset(
 )
 
 # Flags (used without ``=``) whose following token is a value, not a package.
-_VALUE_FLAGS: frozenset[str] = frozenset(
-    {"-c", "--channel", "-n", "--name", "-p", "--prefix", "--override-channels"}
-)
+# IMPORTANT: only flags that genuinely take a value belong here. A *boolean*
+# flag listed here makes the parser swallow the following token — e.g.
+# ``--override-channels -c evil pkg`` would consume the ``-c``, never record the
+# untrusted channel, and classify the install as trusted (fail-open).
+_VALUE_FLAGS: frozenset[str] = frozenset({"-c", "--channel", "-n", "--name", "-p", "--prefix"})
 
 # Bare package name at the start of a spec (channel/version stripped already).
 _NAME_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9._-]*)")

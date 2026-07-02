@@ -499,6 +499,30 @@ class TestCondaChannels:
         assert by_name["numpy"].trusted is True
         assert by_name["x"].trusted is False and by_name["x"].channel == "badchan"
 
+    def test_override_channels_does_not_swallow_channel_flag(self):
+        """Regression: ``--override-channels`` is a boolean flag; treating it as a
+        value flag swallowed the following ``-c`` token, hid the untrusted channel,
+        and classified the install as trusted (fail-open)."""
+        from agentshield.enforce import conda
+
+        pkgs = conda.parse_conda_install(["--override-channels", "-c", "evil-channel", "numpy"])
+        assert [p.name for p in pkgs] == ["numpy"]
+        assert pkgs[0].trusted is False
+        assert pkgs[0].channel == "evil-channel"
+
+    def test_override_channels_untrusted_fails_closed_end_to_end(self):
+        installs = registry.parse_command("conda install --override-channels -c sketchy evilpkg")
+        assert len(installs) == 1
+        assert installs[0].ecosystem is None
+        assert installs[0].packages == ["evilpkg"]
+        assert installs[0].unverifiable_reason and "sketchy" in installs[0].unverifiable_reason
+
+    def test_override_channels_trusted_channel_still_trusted(self):
+        installs = registry.parse_command("conda install --override-channels -c conda-forge numpy")
+        assert len(installs) == 1
+        assert installs[0].ecosystem is not None
+        assert installs[0].packages == ["numpy"]
+
 
 # ── execve macOS source generation ────────────────────────────────────────────
 

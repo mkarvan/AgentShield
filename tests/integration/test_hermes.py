@@ -369,3 +369,51 @@ def test_interop_with_real_hermes_block_extractor(tmp_path):
         assert allowed is None
     finally:
         mgr._hooks["pre_tool_call"].remove(guard.pre_tool_call)
+
+
+# ── verify_registered (regression) ─────────────────────────────────────────────
+# The registry-introspection branch ended in `any(...) or True` — constant True,
+# so a failed registration could never be reported.
+
+
+def test_verify_registered_false_when_hook_absent_from_readable_registry():
+    from agentshield.integrations.hermes.plugin import HermesGuard, verify_registered
+
+    class Ctx:
+        hooks = {}  # readable registry, hook not present
+
+    guard = HermesGuard.__new__(HermesGuard)
+    guard.registered = True
+    assert verify_registered(Ctx(), guard) is False
+
+
+def test_verify_registered_true_when_hook_present():
+    from agentshield.integrations.hermes.plugin import HermesGuard, verify_registered
+
+    guard = HermesGuard.__new__(HermesGuard)
+    guard.registered = True
+
+    class Ctx:
+        hooks = {"pre_tool_call": [lambda *a, **k: None]}
+
+    assert verify_registered(Ctx(), guard) is True
+
+
+def test_verify_registered_true_when_nothing_readable():
+    from agentshield.integrations.hermes.plugin import HermesGuard, verify_registered
+
+    guard = HermesGuard.__new__(HermesGuard)
+    guard.registered = True
+
+    class Ctx:  # no hook registry attributes at all
+        pass
+
+    assert verify_registered(Ctx(), guard) is True
+
+
+def test_verify_registered_false_when_not_registered():
+    from agentshield.integrations.hermes.plugin import HermesGuard, verify_registered
+
+    guard = HermesGuard.__new__(HermesGuard)
+    guard.registered = False
+    assert verify_registered(object(), guard) is False

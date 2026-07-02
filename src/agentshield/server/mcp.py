@@ -19,7 +19,17 @@ from typing import Any
 from agentshield.core.models import Ecosystem, ScanRequest
 from agentshield.core.scanner import AgentShield
 
-_SERVER_INFO = {"name": "agentshield", "version": "0.1.0"}
+
+def _server_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("agentshield")
+    except PackageNotFoundError:
+        return "0.0.0-dev"
+
+
+_SERVER_INFO = {"name": "agentshield", "version": _server_version()}
 _PROTOCOL_VERSION = "2024-11-05"
 
 _TOOLS: list[dict[str, Any]] = [

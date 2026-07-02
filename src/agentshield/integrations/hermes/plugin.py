@@ -279,19 +279,25 @@ def verify_registered(ctx: Any, guard: HermesGuard) -> bool:
         candidates.append(getattr(manager, "_hooks", None))
     for attr in ("hooks", "_hooks", "hook_registry", "_hook_registry"):
         candidates.append(getattr(ctx, attr, None))
+
+    saw_readable_registry = False
     for registry_obj in candidates:
         if registry_obj is None or not hasattr(registry_obj, "get"):
             continue
         try:
             entries = registry_obj.get(_HOOK_NAME)
         except Exception:  # noqa: BLE001 — introspection is best-effort
-            return True
+            continue
+        saw_readable_registry = True
         if entries:
-            callbacks = entries if isinstance(entries, (list, tuple, set)) else [entries]
-            # Presence of our callback (or any entry, for wrapping hosts) is good.
-            return any(cb is guard.pre_tool_call for cb in callbacks) or True
-    # Could not introspect — rely on register_hook having succeeded.
-    return True
+            # Any entry under our hook name is good — hosts may wrap callbacks,
+            # so identity comparison against guard.pre_tool_call can't be required.
+            return True
+    # Readable registries but our hook in none of them → registration did not
+    # stick. (Previously this path ended in ``any(...) or True`` — constant
+    # True, so a failed registration could never be reported.) When nothing is
+    # introspectable, rely on register_hook having succeeded.
+    return not saw_readable_registry
 
 
 def _resolve_config_path(ctx: Any) -> Path | None:

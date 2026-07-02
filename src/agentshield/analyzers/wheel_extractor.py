@@ -103,23 +103,31 @@ def _safe_tarfile_extract(tf: tarfile.TarFile, extract_to: Path) -> None:
     """Extract a tar archive, blocking path-traversal (tar-slip) attacks.
 
     On Python >= 3.12 we use the built-in ``filter="data"`` guard.
-    On 3.11 we manually validate each member path -- the ``filter`` parameter
-    was only added in 3.12 and raises TypeError on earlier versions.
+
+    On 3.11 we validate each member path and **reject any link member**
+    (symlink or hardlink). Merely realpath-checking link targets before
+    ``extractall`` is not enough: the paths don't exist yet at validation
+    time, so a symlink member pointing outside followed by a member that
+    writes *through* that symlink passes the pre-check but escapes during
+    extraction. Wheels/sdists have no legitimate need for links, so rejecting
+    them outright is safe (3.12's ``filter="data"`` is stricter here too —
+    it raises on absolute or outside-pointing link targets).
     """
     if sys.version_info >= (3, 12):
         tf.extractall(extract_to, filter="data")
     else:
         target_dir = os.path.realpath(extract_to)
         for member in tf.getmembers():
+            if member.issym() or member.islnk():
+                raise WheelExtractionError(
+                    f"Archive contains a link member {member.name!r} — refusing to "
+                    "extract (links can be chained to escape the extraction directory)"
+                )
             member_path = os.path.realpath(os.path.join(target_dir, member.name))
             if not (member_path.startswith(target_dir + os.sep) or member_path == target_dir):
                 raise WheelExtractionError(
                     f"Tar-slip detected: {member.name!r} resolves outside extraction directory"
                 )
-            if member.issym() or member.islnk():
-                link_target = os.path.realpath(os.path.join(target_dir, member.linkname))
-                if not link_target.startswith(target_dir + os.sep):
-                    raise WheelExtractionError(f"Tar-slip detected via symlink: {member.name!r}")
         tf.extractall(extract_to)
 
 

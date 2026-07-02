@@ -355,3 +355,49 @@ async def test_extracted_package_no_artifacts_raises() -> None:
     with pytest.raises(WheelExtractionError, match="No downloadable artifacts"):
         async with extracted_package(request):
             pass  # pragma: no cover
+
+
+# ── tar link members (regression, <3.12 fallback path) ────────────────────────
+# Realpath-checking link targets before extractall is bypassable: the target
+# doesn't exist at validation time, so 'symlink out, then write through it'
+# passed the pre-check. Link members are now rejected outright on <3.12
+# (3.12's filter="data" already raises on escaping links).
+
+
+def _make_tar_gz_with_symlink(tmp_path: Path, linkname: str) -> Path:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo(name="pkg/evil-link")
+        info.type = tarfile.SYMTYPE
+        info.linkname = linkname
+        tf.addfile(info)
+        data = b"payload"
+        finfo = tarfile.TarInfo(name="pkg/evil-link/owned.txt")
+        finfo.size = len(data)
+        tf.addfile(finfo, io.BytesIO(data))
+    p = tmp_path / "evil-1.0.tar.gz"
+    p.write_bytes(buf.getvalue())
+    return p
+
+
+def test_extract_sdist_rejects_symlink_escape(tmp_path: Path) -> None:
+    import sys
+
+    sdist = _make_tar_gz_with_symlink(tmp_path, linkname="../../outside")
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with pytest.raises((WheelExtractionError, tarfile.TarError)):
+        _extract_sdist(sdist, extract_dir)
+    # Nothing may be written outside the extraction dir.
+    assert not (tmp_path / "outside").exists()
+    if sys.version_info < (3, 12):
+        # The fallback path rejects the archive before extracting anything.
+        assert list(extract_dir.iterdir()) == []
+
+
+def test_extract_sdist_rejects_absolute_symlink(tmp_path: Path) -> None:
+    sdist = _make_tar_gz_with_symlink(tmp_path, linkname="/tmp/outside-abs")
+    extract_dir = tmp_path / "out2"
+    extract_dir.mkdir()
+    with pytest.raises((WheelExtractionError, tarfile.TarError)):
+        _extract_sdist(sdist, extract_dir)

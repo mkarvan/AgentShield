@@ -111,6 +111,44 @@ async def compute_trust_score(
     return TrustScoreResult(score=score, label=_score_to_label(score), signals=signals)
 
 
+def _parse_upload_time(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _earliest_upload(
+    releases: dict[str, Any], fallback_urls: list[dict[str, Any]] | None = None
+) -> datetime | None:
+    """Earliest upload time across all release files — the package creation date.
+
+    Falls back to the latest release's files (*fallback_urls*) when the
+    ``releases`` map carries no usable timestamps (e.g. version-pinned JSON).
+    """
+    earliest: datetime | None = None
+    for files in releases.values():
+        if not isinstance(files, list):
+            continue
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            dt = _parse_upload_time(f.get("upload_time_iso_8601") or f.get("upload_time"))
+            if dt is not None and (earliest is None or dt < earliest):
+                earliest = dt
+    if earliest is None and fallback_urls:
+        for f in fallback_urls:
+            dt = _parse_upload_time(f.get("upload_time_iso_8601") or f.get("upload_time"))
+            if dt is not None and (earliest is None or dt < earliest):
+                earliest = dt
+    return earliest
+
+
 async def _fetch_pypi_signals(
     client: httpx.AsyncClient,
     package: str,
@@ -125,20 +163,19 @@ async def _fetch_pypi_signals(
         info: dict[str, Any] = data.get("info") or {}
         urls: list[dict[str, Any]] = data.get("urls") or []
 
-        # Age: older packages score higher (max 30 points; 1 pt/month up to 2.5 years)
-        if urls:
-            upload_time_str = urls[-1].get("upload_time_iso_8601") or urls[-1].get("upload_time")
-            if upload_time_str:
-                try:
-                    upload_dt = datetime.fromisoformat(str(upload_time_str).replace("Z", "+00:00"))
-                    age_days = (datetime.now(UTC) - upload_dt).days
-                    signals["age_days"] = age_days
-                    score_parts.append((min(30, age_days // 30), 30))
-                except (ValueError, TypeError):
-                    pass
+        # Age: older packages score higher (max 30 points; 1 pt/month up to 2.5
+        # years). Measured from the *earliest* upload across all releases — the
+        # package's creation date. The latest release's upload time (urls[-1])
+        # is NOT package age: it would score an actively-maintained 10-year-old
+        # package like a brand-new one, and reward abandonware.
+        releases: dict[str, Any] = data.get("releases") or {}
+        first_upload = _earliest_upload(releases, fallback_urls=urls)
+        if first_upload is not None:
+            age_days = (datetime.now(UTC) - first_upload).days
+            signals["age_days"] = age_days
+            score_parts.append((min(30, age_days // 30), 30))
 
         # Version count: many releases → active maintenance (max 20 points)
-        releases: dict[str, Any] = data.get("releases") or {}
         release_count = len(releases)
         signals["release_count"] = release_count
         score_parts.append((min(20, release_count * 2), 20))

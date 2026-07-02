@@ -199,6 +199,53 @@ async def test_compute_trust_score_pypistats_failure_does_not_crash() -> None:
 
 
 @respx.mock
+async def test_pypi_age_uses_earliest_release_not_latest_upload() -> None:
+    """Regression: age was measured from the *latest* release's upload time, so
+    a 10-year-old package that shipped yesterday scored like a brand-new one
+    (and abandonware got full age points). Age must come from the earliest
+    upload across all releases."""
+    respx.get("https://pypi.org/pypi/old-but-active/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "info": {},
+                # Latest release uploaded very recently…
+                "urls": [{"upload_time_iso_8601": "2026-06-30T00:00:00+00:00"}],
+                # …but the first release is over a decade old.
+                "releases": {
+                    "0.1.0": [{"upload_time_iso_8601": "2012-01-01T00:00:00+00:00"}],
+                    "9.0.0": [{"upload_time_iso_8601": "2026-06-30T00:00:00+00:00"}],
+                },
+            },
+        )
+    )
+    respx.get("https://pypistats.org/api/packages/old-but-active/recent").mock(
+        return_value=httpx.Response(200, json={"data": {"last_month": 10}})
+    )
+    req = ScanRequest(package="old-but-active", ecosystem=Ecosystem.PYPI)
+    result = await compute_trust_score(req)
+    # >10 years old → far beyond the 30-month cap → full age signal.
+    assert result.signals["age_days"] > 3000
+
+
+def test_earliest_upload_falls_back_to_urls_when_releases_have_no_files() -> None:
+    from agentshield.analyzers.trust_score import _earliest_upload
+
+    dt = _earliest_upload(
+        {"1.0": [], "2.0": []},
+        fallback_urls=[{"upload_time_iso_8601": "2020-01-01T00:00:00+00:00"}],
+    )
+    assert dt is not None and dt.year == 2020
+
+
+def test_earliest_upload_none_when_no_timestamps() -> None:
+    from agentshield.analyzers.trust_score import _earliest_upload
+
+    assert _earliest_upload({}, fallback_urls=[]) is None
+    assert _earliest_upload({"1.0": [{}]}, fallback_urls=[{}]) is None
+
+
+@respx.mock
 async def test_new_package_scores_lower_than_established() -> None:
     respx.get("https://pypi.org/pypi/brand-new/json").mock(
         return_value=httpx.Response(

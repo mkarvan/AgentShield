@@ -1288,7 +1288,7 @@ Every scan now includes a 0–100 trust score reflecting a package's reputation 
 
 ### Signals used
 
-- **PyPI:** publication age, release count, metadata completeness (homepage, summary, author), monthly download count via pypistats.org
+- **PyPI:** package age (earliest release upload date), release count, metadata completeness (homepage, summary, author), monthly download count via pypistats.org
 - **npm:** creation date, version count, maintainer count, monthly download count via npm downloads API
 - **crates.io:** creation date, version count, total download count
 - **Scan history:** past BLOCK decisions in local AgentShield DB penalise the score

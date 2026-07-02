@@ -54,6 +54,44 @@ def _make_request(package: str = "requests", version: str | None = None) -> Scan
 
 
 @pytest.mark.asyncio
+async def test_clients_share_process_wide_limiter():
+    """Regression: a fresh NVDClient is built per scan, so a per-instance
+    limiter never accumulated state — 50-package manifest scans hammered NVD
+    and got 429s. Clients with the same limit must share one limiter."""
+    from agentshield.databases.nvd import NVDClient
+
+    a, b = NVDClient(), NVDClient()
+    assert a._limiter is b._limiter
+    keyed_a, keyed_b = NVDClient(api_key="k"), NVDClient(api_key="k")
+    assert keyed_a._limiter is keyed_b._limiter
+    assert a._limiter is not keyed_a._limiter  # different budgets
+
+
+async def test_shared_limiter_counts_across_clients():
+    from agentshield.databases.nvd import NVDClient, NVDRateLimiter
+
+    limiter = NVDRateLimiter(limit=100, window=30)
+    c1 = NVDClient(limiter=limiter)
+    c2 = NVDClient(limiter=limiter)
+    await c1._limiter.acquire()
+    await c2._limiter.acquire()
+    assert len(limiter._calls) == 2
+
+
+def test_limiter_usable_across_event_loops():
+    """The shared limiter must survive sequential asyncio.run() loops (the CLI
+    creates a new loop per command); an asyncio.Lock-based limiter raised
+    'bound to a different event loop' here."""
+    import asyncio as _asyncio
+
+    from agentshield.databases.nvd import NVDRateLimiter
+
+    limiter = NVDRateLimiter(limit=10, window=30)
+    _asyncio.run(limiter.acquire())
+    _asyncio.run(limiter.acquire())  # second, fresh loop
+    assert len(limiter._calls) == 2
+
+
 async def test_rate_limiter_allows_under_limit():
     limiter = NVDRateLimiter(limit=5, window=30)
     for _ in range(5):

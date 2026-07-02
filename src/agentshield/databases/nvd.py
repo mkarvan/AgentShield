@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -55,39 +56,61 @@ _RESULTS_PER_PAGE = 100
 
 
 class NVDRateLimiter:
-    """Token-bucket style sliding-window rate limiter."""
+    """Sliding-window rate limiter, shared across scans.
+
+    Uses a ``threading.Lock`` (not ``asyncio.Lock``) so one instance can be
+    shared by scans running on *different* event loops — the CLI drives each
+    command with its own ``asyncio.run()``, and an asyncio primitive binds to
+    the first loop that uses it. The lock only guards the in-memory timestamp
+    list (never held across an await), so it cannot block the loop.
+    """
 
     def __init__(self, limit: int, window: float = _WINDOW_SECS) -> None:
         self._limit = limit
         self._window = window
         self._calls: list[float] = []
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def acquire(self) -> None:
-        async with self._lock:
-            now = time.monotonic()
-            cutoff = now - self._window
-            self._calls = [t for t in self._calls if t > cutoff]
-
-            if len(self._calls) >= self._limit:
-                # Wait until the oldest call falls out of the window
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                cutoff = now - self._window
+                self._calls = [t for t in self._calls if t > cutoff]
+                if len(self._calls) < self._limit:
+                    self._calls.append(now)
+                    return
+                # Wait until the oldest call falls out of the window, then retry.
                 wait = self._calls[0] - cutoff
-                if wait > 0:
-                    await asyncio.sleep(wait)
-                # Remove calls that have now expired
-                now2 = time.monotonic()
-                self._calls = [t for t in self._calls if t > now2 - self._window]
+            await asyncio.sleep(max(wait, 0.05))
 
-            self._calls.append(time.monotonic())
+
+# Limiters shared process-wide, keyed by request limit. A fresh NVDClient is
+# built for every scan (scanner._run_checks), so per-instance limiter state
+# never carried across packages — during a 50-package manifest scan each
+# client thought it had made zero calls and NVD answered with 429s.
+_SHARED_LIMITERS: dict[int, NVDRateLimiter] = {}
+_SHARED_LIMITERS_LOCK = threading.Lock()
+
+
+def _shared_limiter(limit: int) -> NVDRateLimiter:
+    with _SHARED_LIMITERS_LOCK:
+        limiter = _SHARED_LIMITERS.get(limit)
+        if limiter is None:
+            limiter = NVDRateLimiter(limit)
+            _SHARED_LIMITERS[limit] = limiter
+        return limiter
 
 
 class NVDClient:
     """Queries the NVD CVE API v2 to find vulnerabilities for a package."""
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(self, api_key: str | None = None, limiter: NVDRateLimiter | None = None) -> None:
         self._api_key = api_key
         limit = _LIMIT_WITH_KEY if api_key else _LIMIT_NO_KEY
-        self._limiter = NVDRateLimiter(limit)
+        # Default to the process-wide shared limiter so the NVD budget is
+        # enforced across all scans; tests may inject their own.
+        self._limiter = limiter if limiter is not None else _shared_limiter(limit)
 
     async def scan(self, request: ScanRequest) -> list[Finding]:
         try:

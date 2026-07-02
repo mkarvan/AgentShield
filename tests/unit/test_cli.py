@@ -301,9 +301,11 @@ def _ascan_returning(action: DecisionAction):
 
 
 def _guard_invoke(tmp_path, env=None):
+    # --config must come before the command tokens: option parsing stops at the
+    # first positional so the wrapped command's own flags are passed through.
     return runner.invoke(
         app,
-        ["guard-scan-cmd", "pip", "install", "somepkg", "--config", str(tmp_path / "no.toml")],
+        ["guard-scan-cmd", "--config", str(tmp_path / "no.toml"), "pip", "install", "somepkg"],
         env=env,
     )
 

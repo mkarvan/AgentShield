@@ -186,6 +186,32 @@ class TestGuardScanCmdCLI:
             or "cannot verify" in combined.lower()
         )
 
+    def test_pip_constraint_flag_passes_through_and_is_scanned(
+        self, guard_config: Path, tmp_path: Path
+    ) -> None:
+        """Regression: in ``pip install -c constraints.txt pkg`` the ``-c`` belongs
+        to pip, not to guard-scan-cmd's own --config/-c option. It used to be
+        swallowed by the option parser, so the constraint file was never scanned
+        (and Config.load crashed parsing it as TOML). The file must now be passed
+        through and scanned: a denylisted package inside it blocks the install."""
+        constraints = tmp_path / "constraints.txt"
+        constraints.write_text("evil-pypi-pkg==1.0\n")
+        result = _guard_cli(
+            "pip", "install", "-c", str(constraints), "requests", config=guard_config
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "BLOCK" in (result.stdout + result.stderr)
+
+    def test_pip_constraint_flag_clean_file_exits_0(
+        self, guard_config: Path, tmp_path: Path
+    ) -> None:
+        constraints = tmp_path / "constraints.txt"
+        constraints.write_text("requests==2.32.0\n")
+        result = _guard_cli(
+            "pip", "install", "-c", str(constraints), "requests", config=guard_config
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
     def test_no_install_command_exits_0(self, guard_config: Path) -> None:
         """Non-install commands pass through without scan."""
         result = _guard_cli("pip", "list", config=guard_config)

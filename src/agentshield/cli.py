@@ -747,7 +747,14 @@ def guard(
 @app.command(
     "guard-scan-cmd",
     hidden=True,
-    context_settings={"ignore_unknown_options": True},
+    # allow_interspersed_args=False stops option parsing at the first positional
+    # token, so flags belonging to the *wrapped* command are never captured by
+    # this command's own options. Without it, ``guard-scan-cmd pip install -c
+    # constraints.txt pkg`` had its ``-c constraints.txt`` swallowed by our
+    # --config/-c option: the constraint file was never scanned and Config.load
+    # then crashed trying to parse it as TOML. Our own --config must therefore
+    # be passed *before* the command tokens.
+    context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
 )
 def guard_scan_cmd(
     args: list[str] = typer.Argument(..., help="Command tokens to scan (e.g. pip install pkg)"),
@@ -758,6 +765,10 @@ def guard_scan_cmd(
     Scans all packages detected in a shell install command.
     Exits 0 if safe, 1 if any package is blocked.
     Also emits warnings for system package manager invocations.
+
+    Note: options for *this* command (``--config``) must precede the command
+    tokens; everything from the first non-option token onward is passed through
+    verbatim as the command to scan.
     """
     import shlex
     from pathlib import Path

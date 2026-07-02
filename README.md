@@ -1365,7 +1365,7 @@ All responses are JSON. Errors return `{"error": "..."}` with the appropriate HT
 | Env var | `AGENTSHIELD_ALLOWED_DIRS=/path/a:/path/b` (colon-separated) |
 | Python API | Pass `allowed_dirs=[Path("/path/a")]` to the `HTTPServer` constructor |
 
-The HTTP server uses Python's asyncio stdlib — no extra dependencies required. It binds to `127.0.0.1` and has **no authentication**, so it must not be exposed to untrusted networks (binding to a non-loopback host logs a warning). Request bodies larger than 10 MB are rejected with **413 Payload Too Large**.
+The HTTP server uses Python's asyncio stdlib — no extra dependencies required. It binds to `127.0.0.1` and has **no authentication**, so it must not be exposed to untrusted networks (binding to a non-loopback host logs a warning). Requests whose `Host` header is not a loopback name (or the configured bind host) are rejected with **403** as a DNS-rebinding guard. Request bodies larger than 10 MB are rejected with **413 Payload Too Large**.
 
 ---
 

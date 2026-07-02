@@ -113,6 +113,18 @@ class HTTPServer:
                     k, _, v = line.decode(errors="replace").partition(":")
                     headers[k.lower().strip()] = v.strip()
 
+            # DNS-rebinding guard: a browser script pointed at attacker.example
+            # (rebound to 127.0.0.1) reaches this unauthenticated API with the
+            # attacker's hostname in Host. Only accept loopback/self hostnames.
+            if not self._host_header_allowed(headers.get("host")):
+                self._write_response(
+                    writer,
+                    403,
+                    {"error": "Forbidden: unexpected Host header"},
+                )
+                await writer.drain()
+                return
+
             content_length = int(headers.get("content-length", "0") or "0")
             if content_length > _MAX_BODY_BYTES:
                 self._write_response(
@@ -133,6 +145,24 @@ class HTTPServer:
             logger.debug("HTTP connection error: %s", exc)
         finally:
             writer.close()
+
+    # ── Host header validation (DNS-rebinding guard) ──────────────────────────
+
+    def _host_header_allowed(self, host_header: str | None) -> bool:
+        """Accept only loopback names or the configured bind host.
+
+        HTTP/1.1 requires a Host header; requests without one are rejected.
+        The port part (``127.0.0.1:8765``) is ignored.
+        """
+        if not host_header:
+            return False
+        host = host_header.strip().lower()
+        # Strip port: handle "[::1]:8765", "127.0.0.1:8765", "localhost:8765"
+        if host.startswith("["):
+            host = host.partition("]")[0].lstrip("[")
+        elif host.count(":") == 1:
+            host = host.partition(":")[0]
+        return host in _LOOPBACK_HOSTS or host == self.host.lower()
 
     # ── routing ───────────────────────────────────────────────────────────────
 

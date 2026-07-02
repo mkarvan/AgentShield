@@ -192,7 +192,7 @@ def test_write_response_400() -> None:
 async def test_oversized_content_length_returns_413() -> None:
     server = HTTPServer(MagicMock())
     reader = asyncio.StreamReader()
-    reader.feed_data(b"POST /scan HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n")
+    reader.feed_data(b"POST /scan HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 99999999\r\n\r\n")
     reader.feed_eof()
 
     written: list[bytes] = []
@@ -211,7 +211,10 @@ async def test_body_within_limit_is_processed() -> None:
     server = HTTPServer(_make_shield(scan_result=_allow_result()))
     body = json.dumps({"package": "requests", "ecosystem": "pypi"}).encode()
     request = (
-        b"POST /scan HTTP/1.1\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+        b"POST /scan HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: "
+        + str(len(body)).encode()
+        + b"\r\n\r\n"
+        + body
     )
     reader = asyncio.StreamReader()
     reader.feed_data(request)
@@ -311,3 +314,61 @@ def test_validate_path_allows_tmp_by_default(tmp_path: Path) -> None:
     tmp_file = Path(tempfile.gettempdir()) / "agentshield_test_file.txt"
     resolved, err = server._validate_path(str(tmp_file))
     assert err is None
+
+
+# ── Host header validation (DNS-rebinding guard) ──────────────────────────────
+
+
+def _server():
+    from agentshield.server.http_server import HTTPServer
+
+    return HTTPServer(shield=None)
+
+
+def test_host_header_loopback_variants_allowed() -> None:
+    srv = _server()
+    for host in (
+        "127.0.0.1",
+        "127.0.0.1:8765",
+        "localhost",
+        "localhost:9000",
+        "[::1]:8765",
+        "::1",
+    ):
+        assert srv._host_header_allowed(host), host
+
+
+def test_host_header_foreign_hostname_rejected() -> None:
+    srv = _server()
+    for host in ("attacker.example", "attacker.example:8765", "evil.localhost.example"):
+        assert not srv._host_header_allowed(host), host
+
+
+def test_host_header_missing_rejected() -> None:
+    srv = _server()
+    assert not srv._host_header_allowed(None)
+    assert not srv._host_header_allowed("")
+
+
+def test_host_header_matches_configured_bind_host() -> None:
+    from agentshield.server.http_server import HTTPServer
+
+    srv = HTTPServer(shield=None, host="192.168.1.50")
+    assert srv._host_header_allowed("192.168.1.50:8765")
+    assert not srv._host_header_allowed("192.168.1.51:8765")
+
+
+async def test_connection_with_foreign_host_header_returns_403() -> None:
+    server = HTTPServer(MagicMock())
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"GET /health HTTP/1.1\r\nHost: attacker.example\r\n\r\n")
+    reader.feed_eof()
+
+    written: list[bytes] = []
+    writer = MagicMock()
+    writer.write = lambda data: written.append(data)
+    writer.drain = AsyncMock()
+    writer.close = MagicMock()
+
+    await server._handle_connection(reader, writer)
+    assert "403" in b"".join(written).decode()

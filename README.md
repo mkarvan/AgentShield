@@ -1036,6 +1036,8 @@ agentshield scan django==4.2.0 -T --transitive-depth 5 # resolve up to 5 levels 
 
 `--transitive-depth` controls the maximum resolution depth (default: 3). Transitive results are printed in a separate summary table after the direct-package findings.
 
+A **blocked transitive dependency fails the scan**: `agentshield scan --transitive` exits 1 even when the requested package itself is clean, and manifest scans (`scan-file`, `sbom`, `scan-docker`) count such packages as blocked in the aggregate decision — installing the parent would install the blocked dependency.
+
 Transitive scanning uses the registry API (PyPI JSON, npm registry, crates.io) to resolve dependency metadata without downloading or installing anything. It works alongside `--offline` (resolves from cache only) and `--deep` (also runs static analysis on transitive deps).
 
 ---

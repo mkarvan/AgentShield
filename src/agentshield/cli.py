@@ -176,6 +176,19 @@ def scan(
     if result.decision.action == DecisionAction.BLOCK:
         raise typer.Exit(code=1)
 
+    # A clean package that depends on a blocked one still installs the blocked
+    # code — transitive BLOCKs must fail the scan too (mirrors the proxy).
+    if result.effective_action == DecisionAction.BLOCK:
+        blocked_deps = [
+            tr.request.package
+            for tr in result.transitive_results
+            if tr.decision.action == DecisionAction.BLOCK
+        ]
+        console.print(
+            f"[red]BLOCK — transitive dependency(ies) blocked: {', '.join(blocked_deps)}[/red]"
+        )
+        raise typer.Exit(code=1)
+
 
 async def _scan_with_progress(
     shield: AgentShield, request: ScanRequest, *, deep: bool

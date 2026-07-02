@@ -113,6 +113,43 @@ def test_file_scan_result_log_async_counts_as_warned(tmp_path: Path) -> None:
     assert fsr.warned == 1
 
 
+# ── transitive results must drive the aggregate (regression) ──────────────────
+# A clean package depending on a blocked one still installs the blocked code;
+# aggregates/exit codes previously only looked at the package's own decision.
+
+
+def _allow_with_blocked_dep(pkg: str, dep: str) -> ScanResult:
+    clean = _allow_result(pkg)
+    return clean.model_copy(update={"transitive_results": [_block_result(dep)]})
+
+
+def test_effective_action_is_own_action_without_transitives() -> None:
+    assert _allow_result("a").effective_action == DecisionAction.ALLOW
+    assert _block_result("b").effective_action == DecisionAction.BLOCK
+
+
+def test_effective_action_escalates_to_transitive_block() -> None:
+    r = _allow_with_blocked_dep("clean-pkg", "evil-dep")
+    assert r.decision.action == DecisionAction.ALLOW
+    assert r.effective_action == DecisionAction.BLOCK
+
+
+def test_effective_action_escalates_to_transitive_needs_confirmation() -> None:
+    dep = _allow_result("dep").model_copy(
+        update={"decision": Decision(action=DecisionAction.NEEDS_CONFIRMATION, reason="check")}
+    )
+    r = _allow_result("pkg").model_copy(update={"transitive_results": [dep]})
+    assert r.effective_action == DecisionAction.NEEDS_CONFIRMATION
+
+
+def test_file_scan_result_transitive_block_counts_as_blocked(tmp_path: Path) -> None:
+    results = [_allow_result("a"), _allow_with_blocked_dep("clean-pkg", "evil-dep")]
+    fsr = FileScanResult.from_results(tmp_path / "requirements.txt", results)
+    assert fsr.aggregate_decision.action == DecisionAction.BLOCK
+    assert fsr.blocked == 1
+    assert fsr.allowed == 1
+
+
 # ── ascan_file integration with mocked network ────────────────────────────────
 
 

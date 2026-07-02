@@ -338,6 +338,42 @@ def test_guard_block_exits_1(tmp_path):
     assert "BLOCKED" in result.output
 
 
+# ── scan --transitive: blocked transitive deps must fail the exit code ─────────
+# Regression: `agentshield scan pkg --transitive` printed the blocked transitive
+# dependency but still exited 0 (only the primary decision was checked).
+
+
+def _ascan_clean_with_blocked_dep():
+    from agentshield.core.models import ScanRequest
+
+    async def _fake(self, request):  # noqa: ANN001
+        dep = ScanResult(
+            request=ScanRequest(package="evil-dep", ecosystem=request.ecosystem),
+            findings=[],
+            max_severity=Severity.CRITICAL,
+            decision=Decision(action=DecisionAction.BLOCK, reason="malicious dep"),
+        )
+        return ScanResult(
+            request=request,
+            findings=[],
+            max_severity=Severity.NONE,
+            decision=Decision(action=DecisionAction.ALLOW, reason="pkg clean"),
+            transitive_results=[dep],
+        )
+
+    return _fake
+
+
+def test_scan_transitive_blocked_dep_exits_1(tmp_path):
+    with patch.object(AgentShield, "ascan", _ascan_clean_with_blocked_dep()):
+        result = runner.invoke(
+            app,
+            ["scan", "clean-pkg", "--transitive", "--config", str(tmp_path / "no.toml")],
+        )
+    assert result.exit_code == 1, result.output
+    assert "evil-dep" in result.output
+
+
 # ── guard-scan-cmd: syspkg CVE findings must honor the same warn_confirm contract ──
 # Regression: HIGH CVEs (warn_confirm under the default syspkg policy) were merged
 # with LOG_ASYNC into one "flagged for review" bucket that always proceeded — the

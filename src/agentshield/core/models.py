@@ -229,6 +229,16 @@ class ScanRequest(BaseModel):
         return v
 
 
+# Strictness ordering for DecisionAction — used to pick the worst action when
+# aggregating a package with its transitive dependencies.
+_ACTION_ORDER: dict[DecisionAction, int] = {
+    DecisionAction.ALLOW: 0,
+    DecisionAction.LOG_ASYNC: 1,
+    DecisionAction.NEEDS_CONFIRMATION: 2,
+    DecisionAction.BLOCK: 3,
+}
+
+
 class ScanResult(BaseModel):
     """Aggregated output from a completed scan.
 
@@ -254,6 +264,21 @@ class ScanResult(BaseModel):
     transitive_results: list[ScanResult] = Field(default_factory=list)
     trust_score: int | None = None
     trust_label: str | None = None
+
+    @property
+    def effective_action(self) -> DecisionAction:
+        """The worst action across this result *and* its transitive results.
+
+        ``decision.action`` covers only the package itself; a clean package
+        depending on a blocked one still installs the blocked code. Callers
+        deciding whether an install may proceed (exit codes, aggregates)
+        should use this instead of ``decision.action``.
+        """
+        worst = self.decision.action
+        for tr in self.transitive_results:
+            if _ACTION_ORDER[tr.decision.action] > _ACTION_ORDER[worst]:
+                worst = tr.decision.action
+        return worst
 
     @model_validator(mode="after")
     def _check_max_severity_consistent(self) -> ScanResult:
@@ -299,13 +324,15 @@ class FileScanResult(BaseModel):
 
     @classmethod
     def from_results(cls, path: Any, results: list[ScanResult]) -> FileScanResult:
-        blocked = sum(1 for r in results if r.decision.action == DecisionAction.BLOCK)
+        # Counted on effective_action so a package whose *transitive dependency*
+        # is blocked counts as blocked — installing it installs the dependency.
+        blocked = sum(1 for r in results if r.effective_action == DecisionAction.BLOCK)
         warned = sum(
             1
             for r in results
-            if r.decision.action in (DecisionAction.NEEDS_CONFIRMATION, DecisionAction.LOG_ASYNC)
+            if r.effective_action in (DecisionAction.NEEDS_CONFIRMATION, DecisionAction.LOG_ASYNC)
         )
-        allowed = sum(1 for r in results if r.decision.action == DecisionAction.ALLOW)
+        allowed = sum(1 for r in results if r.effective_action == DecisionAction.ALLOW)
         total_findings = sum(len(r.findings) for r in results)
 
         if blocked:

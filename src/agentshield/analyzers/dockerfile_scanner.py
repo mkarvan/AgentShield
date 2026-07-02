@@ -43,21 +43,26 @@ def parse_dockerfile(path: Path) -> list[ScanRequest]:
         if command.startswith("["):
             command = _exec_form_to_shell(command)
 
-        # registry.parse_packages yields (package, ecosystem) for every
-        # verifiable manager (pip/uv/pipx/poetry/conda, npm/yarn/pnpm/bun, cargo).
-        for pkg_name, ecosystem in registry.parse_packages(command):
-            key = (pkg_name.lower(), ecosystem)
-            if key in seen:
+        # registry.parse_command yields every verifiable manager invocation
+        # (pip/uv/pipx/poetry/conda, npm/yarn/pnpm/bun, cargo) including exact
+        # version pins — 'RUN pip install requests==2.19.0' must be scanned at
+        # 2.19.0, not at latest.
+        for inst in registry.parse_command(command):
+            if inst.ecosystem is None:
                 continue
-            seen.add(key)
-            requests.append(
-                ScanRequest(
-                    package=pkg_name,
-                    version=None,
-                    ecosystem=ecosystem,
-                    source="dockerfile",
+            for pkg_name in inst.packages:
+                key = (pkg_name.lower(), inst.ecosystem)
+                if key in seen:
+                    continue
+                seen.add(key)
+                requests.append(
+                    ScanRequest(
+                        package=pkg_name,
+                        version=inst.versions.get(pkg_name),
+                        ecosystem=inst.ecosystem,
+                        source="dockerfile",
+                    )
                 )
-            )
 
     return requests
 

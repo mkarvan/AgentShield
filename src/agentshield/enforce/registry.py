@@ -140,9 +140,32 @@ def tokenize_packages(args_str: str) -> list[str]:
     return _tokenize(args_str.split())
 
 
-def _tokenize(tokens: list[str]) -> list[str]:
-    """Extract bare package names from an already-split token list."""
-    packages: list[str] = []
+# Exact version pin following the package name: ``==1.2.3`` (pip) or ``@1.2.3``
+# (npm/cargo). Range specifiers (>=, ~, ^…) and dist-tags (@latest) are not
+# pins and yield no version.
+_EXACT_PIN_RE = re.compile(r"^(?:==|@)(\d[^\s,;]*)$")
+
+
+def _split_spec(token: str) -> tuple[str, str | None] | None:
+    """Split a package-spec token into ``(name, exact_pin_or_None)``.
+
+    Returns ``None`` when the token is not a package spec. ``requests==2.28.0``
+    → ``("requests", "2.28.0")``; ``serde@1.0``/``@scope/pkg@2.1`` keep their
+    pin; ``requests>=2`` / ``pkg@latest`` → pin ``None``.
+    """
+    m = _PKG_SPEC_RE.match(token)
+    if not m:
+        return None
+    name = m.group(1)
+    rest = token[len(name) :]
+    rest = re.sub(r"^\[[^\]]*\]", "", rest)  # strip extras: pkg[extra]==1.0
+    pin = _EXACT_PIN_RE.match(rest)
+    return name, (pin.group(1) if pin else None)
+
+
+def _tokenize_specs(tokens: list[str]) -> list[tuple[str, str | None]]:
+    """Extract ``(package, exact_pin_or_None)`` pairs from a split token list."""
+    specs: list[tuple[str, str | None]] = []
     i = 0
     while i < len(tokens):
         token = tokens[i]
@@ -156,11 +179,16 @@ def _tokenize(tokens: list[str]) -> list[str]:
         if re.match(r"^(?:[/~.]|https?://|git\+)", token):
             i += 1
             continue
-        m = _PKG_SPEC_RE.match(token)
-        if m:
-            packages.append(m.group(1))
+        spec = _split_spec(token)
+        if spec is not None:
+            specs.append(spec)
         i += 1
-    return packages
+    return specs
+
+
+def _tokenize(tokens: list[str]) -> list[str]:
+    """Extract bare package names from an already-split token list."""
+    return [name for name, _pin in _tokenize_specs(tokens)]
 
 
 # ── manager specification ─────────────────────────────────────────────────────
@@ -296,6 +324,9 @@ class ParsedInstall:
     # When ``ecosystem is None`` (unverifiable), an optional human-readable reason
     # (e.g. an untrusted conda channel) used in fail-closed block messages.
     unverifiable_reason: str | None = None
+    # Exact version pins by package name (``pkg==1.2.3`` / ``pkg@1.2.3``).
+    # Packages without an exact pin are absent from this map.
+    versions: dict[str, str] = field(default_factory=dict)
 
     @property
     def verifiable(self) -> bool:
@@ -374,9 +405,13 @@ def parse_command(command: str) -> list[ParsedInstall]:
         if spec.name == "conda":
             results.extend(_conda_parsed(args.split()))
         else:
+            pkg_specs = _tokenize_specs(args.split())
             results.append(
                 ParsedInstall(
-                    manager=spec.name, ecosystem=spec.ecosystem, packages=_tokenize(args.split())
+                    manager=spec.name,
+                    ecosystem=spec.ecosystem,
+                    packages=[name for name, _pin in pkg_specs],
+                    versions={name: pin for name, pin in pkg_specs if pin},
                 )
             )
     return results
@@ -428,7 +463,13 @@ def parse_argv(argv: list[str]) -> ParsedInstall | None:
                     unverifiable_reason=untrusted[0].unverifiable_reason,
                 )
             return ParsedInstall(manager="conda", ecosystem=Ecosystem.PYPI, packages=names)
-        return ParsedInstall(manager=spec.name, ecosystem=spec.ecosystem, packages=_tokenize(tail))
+        pkg_specs = _tokenize_specs(tail)
+        return ParsedInstall(
+            manager=spec.name,
+            ecosystem=spec.ecosystem,
+            packages=[name for name, _pin in pkg_specs],
+            versions={name: pin for name, pin in pkg_specs if pin},
+        )
     return None
 
 

@@ -1318,7 +1318,7 @@ Supported patterns inside `RUN` instructions:
 | `npm install …`, `npm i …`, `yarn add …` | npm |
 | `cargo add …`, `cargo install …` | Cargo |
 
-Both shell form (`RUN pip install foo`) and exec form (`RUN ["pip", "install", "foo"]`) are supported. Backslash-newline continuations are handled. Duplicate packages across multiple `RUN` instructions are deduplicated.
+Both shell form (`RUN pip install foo`) and exec form (`RUN ["pip", "install", "foo"]`) are supported. Backslash-newline continuations are handled. Duplicate packages across multiple `RUN` instructions are deduplicated. Exact version pins (`pip install requests==2.19.0`, `npm install lodash@4.17.20`) are scanned at the pinned version; range specifiers and dist-tags fall back to latest.
 
 **MCP tool:** `agentshield_scan_docker` with a `path` argument.
 

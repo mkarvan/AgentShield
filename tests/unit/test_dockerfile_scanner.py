@@ -181,3 +181,43 @@ def test_pip_flags_skipped(tmp_path: Path) -> None:
     assert "requests" in pkgs
     # requirements.txt should not be treated as a package
     assert "requirements.txt" not in pkgs
+
+
+# ── version pins (regression) ─────────────────────────────────────────────────
+# Pinned installs used to be scanned at version=None (latest), missing CVEs in
+# the actually-installed old version.
+
+
+def test_pip_exact_pin_is_captured(tmp_path: Path) -> None:
+    p = _write_dockerfile(tmp_path, "RUN pip install requests==2.19.0 flask\n")
+    by_name = {r.package: r for r in parse_dockerfile(p)}
+    assert by_name["requests"].version == "2.19.0"
+    assert by_name["flask"].version is None
+
+
+def test_npm_and_cargo_pins_are_captured(tmp_path: Path) -> None:
+    p = _write_dockerfile(
+        tmp_path, "RUN npm install lodash@4.17.20\nRUN cargo install ripgrep@13.0.0\n"
+    )
+    by_name = {r.package: r for r in parse_dockerfile(p)}
+    assert by_name["lodash"].version == "4.17.20"
+    assert by_name["ripgrep"].version == "13.0.0"
+
+
+def test_scoped_npm_pin_is_captured(tmp_path: Path) -> None:
+    p = _write_dockerfile(tmp_path, "RUN npm install @babel/core@7.24.0\n")
+    reqs = parse_dockerfile(p)
+    assert [(r.package, r.version) for r in reqs] == [("@babel/core", "7.24.0")]
+
+
+def test_range_specifiers_and_dist_tags_are_not_pins(tmp_path: Path) -> None:
+    p = _write_dockerfile(tmp_path, "RUN npm install lodash@latest\nRUN cargo add serde@^1.0\n")
+    by_name = {r.package: r for r in parse_dockerfile(p)}
+    assert by_name["lodash"].version is None  # dist-tag, not an exact pin
+    assert by_name["serde"].version is None  # caret range, not an exact pin
+
+
+def test_extras_with_pin(tmp_path: Path) -> None:
+    p = _write_dockerfile(tmp_path, "RUN pip install requests[security]==2.28.0\n")
+    reqs = parse_dockerfile(p)
+    assert [(r.package, r.version) for r in reqs] == [("requests", "2.28.0")]

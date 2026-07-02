@@ -329,3 +329,100 @@ async def test_block_not_deleted_by_clear_expired(tmp_path, monkeypatch):
     result = await cache.get(req_block)
     assert result is not None
     assert result.decision.action == DecisionAction.BLOCK
+
+
+# ── key_context (license-mode salt) ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_key_context_separates_cache_entries(tmp_path):
+    """Regression: verdicts computed under one license-policy mode were served
+    after the mode changed (the mode isn't part of the ScanRequest)."""
+    cfg = CacheConfig(db_path=tmp_path / "kctx.db")
+    cache_a = ScanCache(cfg, key_context="licmode=disabled")
+    cache_b = ScanCache(cfg, key_context="licmode=denylist")
+
+    req = _make_request()
+    await cache_a.set(req, _make_result(req))
+
+    assert await cache_a.get(req) is not None
+    assert await cache_b.get(req) is None  # different policy → different key
+
+
+def test_scanner_folds_license_mode_into_cache_key(tmp_path):
+    from agentshield.core.config import Config
+    from agentshield.core.scanner import AgentShield
+
+    cfg = Config.model_validate(
+        {
+            "cache": {"db_path": str(tmp_path / "s.db")},
+            "license_policy": {"mode": "denylist"},
+        }
+    )
+    shield = AgentShield(config=cfg)
+    assert "licmode=denylist" in shield.cache._key_context
+
+
+# ── max_entries eviction ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_max_entries_evicts_oldest(tmp_path):
+    """Regression: max_entries existed in config but nothing enforced it."""
+    cfg = CacheConfig(db_path=tmp_path / "evict.db", max_entries=3)
+    cache = ScanCache(cfg)
+
+    for i in range(6):
+        req = _make_request(package=f"pkg-{i}")
+        result = _make_result(req)
+        await cache.set(req, result)
+
+    stats = await cache.stats()
+    assert stats["total"] <= 3
+    # The most recent entry survives.
+    assert await cache.get(_make_request(package="pkg-5")) is not None
+
+
+@pytest.mark.asyncio
+async def test_max_entries_never_evicts_block_entries(tmp_path):
+    """BLOCK entries never expire and must survive eviction too."""
+    cfg = CacheConfig(db_path=tmp_path / "evict2.db", max_entries=2)
+    cache = ScanCache(cfg)
+
+    block_req = _make_request(package="evil-pkg")
+    block_result = ScanResult(
+        request=block_req,
+        findings=[Finding(rule_id="T1.1", title="bad", severity=Severity.CRITICAL, source="t")],
+        max_severity=Severity.CRITICAL,
+        decision=Decision(action=DecisionAction.BLOCK, reason="malicious"),
+    )
+    await cache.set(block_req, block_result)
+
+    for i in range(5):
+        req = _make_request(package=f"filler-{i}")
+        await cache.set(req, _make_result(req))
+
+    fetched = await cache.get(block_req)
+    assert fetched is not None
+    assert fetched.decision.action == DecisionAction.BLOCK
+
+
+# ── cve_mirror case-insensitivity ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_upsert_cve_mixed_case_is_findable(tmp_path):
+    """Regression: upsert_cve stored the package as-is while query_cve_mirror
+    lowercases — a mixed-case write was unfindable."""
+    cache = _make_cache(tmp_path)
+    await cache.upsert_cve("CVE-X", "Django", "PyPI", "[]", "HIGH", 7.0, "desc")
+    rows = await cache.query_cve_mirror("django", "pypi")
+    assert [r["id"] for r in rows] == ["CVE-X"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_cves_bulk_mixed_case_is_findable(tmp_path):
+    cache = _make_cache(tmp_path)
+    await cache.upsert_cves_bulk([("CVE-Y", "Flask", "PyPI", "[]", "HIGH", None, "desc")])
+    rows = await cache.query_cve_mirror("flask", "pypi")
+    assert [r["id"] for r in rows] == ["CVE-Y"]

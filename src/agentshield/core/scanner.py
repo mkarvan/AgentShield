@@ -27,7 +27,13 @@ logger = logging.getLogger(__name__)
 class AgentShield:
     def __init__(self, config: Config | None = None, config_path: Path | None = None) -> None:
         self.config = config or Config.load(config_path)
-        self.cache = ScanCache(self.config.cache)
+        # The license-policy mode changes verdicts but is not part of the
+        # ScanRequest; fold it into the cache key so switching the policy
+        # doesn't serve verdicts computed under the old one.
+        self.cache = ScanCache(
+            self.config.cache,
+            key_context=f"licmode={self.config.license_policy.mode}",
+        )
         self.response_engine = ResponseEngine(self.config)
 
     def scan(self, request: ScanRequest) -> ScanResult:

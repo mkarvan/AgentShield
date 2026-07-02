@@ -88,8 +88,15 @@ CREATE TABLE IF NOT EXISTS session_state (
 
 
 class ScanCache:
-    def __init__(self, config: CacheConfig) -> None:
+    def __init__(self, config: CacheConfig, key_context: str = "") -> None:
+        """*key_context* is folded into every cache key.
+
+        Use it for config that changes scan verdicts but is not part of the
+        ScanRequest (e.g. the license-policy mode): without it, toggling such
+        config serves stale verdicts computed under the old policy until TTL.
+        """
         self.config = config
+        self._key_context = key_context
         config.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ helpers
@@ -109,6 +116,7 @@ class ScanCache:
         raw = (
             f"{request.ecosystem.value}:{request.package}:{request.version or ''}"
             f":deep={int(request.deep)}:lic={int(request.check_licenses)}:ctx={ctx_digest}"
+            f":kctx={self._key_context}"
         )
         return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -162,6 +170,20 @@ class ScanCache:
                     expires_at,
                 ),
             )
+            # Enforce max_entries: evict the oldest rows beyond the cap.
+            # Never-expiring BLOCK rows are exempt — a confirmed-malicious
+            # package must not silently flip to a fresh (possibly weaker)
+            # verdict because the cache filled up.
+            if self.config.max_entries > 0:
+                await db.execute(
+                    """DELETE FROM scan_cache
+                       WHERE expires_at != ?
+                       AND id NOT IN (
+                           SELECT id FROM scan_cache
+                           ORDER BY scanned_at DESC, rowid DESC LIMIT ?
+                       )""",
+                    (_BLOCK_EXPIRES_AT, self.config.max_entries),
+                )
             await db.commit()
 
     async def clear(self) -> int:
@@ -224,8 +246,10 @@ class ScanCache:
                    VALUES (?,?,?,?,?,?,?,?)""",
                 (
                     cve_id,
-                    package,
-                    ecosystem,
+                    # Lowercased on write because query_cve_mirror queries
+                    # lowercased — a mixed-case write was unfindable.
+                    package.lower(),
+                    ecosystem.lower(),
                     affected_versions,
                     severity,
                     cvss_score,
@@ -236,9 +260,16 @@ class ScanCache:
             await db.commit()
 
     async def upsert_cves_bulk(self, rows: list[tuple[Any, ...]]) -> int:
-        """Insert many CVE mirror rows at once. Returns inserted count."""
+        """Insert many CVE mirror rows at once. Returns inserted count.
+
+        Package/ecosystem are lowercased on write to match the lowercased
+        lookups in :meth:`query_cve_mirror`.
+        """
         now = int(time.time())
-        records = [(*r, now) if len(r) == 7 else r for r in rows]
+        records = []
+        for r in rows:
+            rec = (*r, now) if len(r) == 7 else r
+            records.append((rec[0], str(rec[1]).lower(), str(rec[2]).lower(), *rec[3:]))
         async with aiosqlite.connect(self.config.db_path) as db:
             await self._ensure_schema(db)
             await db.executemany(

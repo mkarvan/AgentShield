@@ -350,9 +350,10 @@ github_token = ""    # Required for GitHub Advisory Database (GraphQL)
 [cache]
 db_path   = "~/.agentshield/agentshield.db"
 ttl_hours = 24
-# Entries are evicted (LRU) once this many are cached, and each is re-fetched
-# after ttl_hours. Entries are small JSON blobs, so the default 50,000-entry
-# cap corresponds to roughly tens of MB of disk and working memory.
+# Entries are evicted (oldest first) once this many are cached, and each is
+# re-fetched after ttl_hours. Never-expiring BLOCK entries are exempt from
+# eviction. Entries are small JSON blobs, so the default 50,000-entry cap
+# corresponds to roughly tens of MB of disk and working memory.
 max_entries = 50000
 
 # ── System packages (apt/yum/apk/brew/snap/…) ─────────────────────────────────

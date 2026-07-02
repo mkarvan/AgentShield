@@ -3,6 +3,18 @@
 Tracks packages scanned per hour and total wheel bytes downloaded per session.
 State is persisted in the SQLite DB so limits survive process restarts within
 the same session (identified by AGENTSHIELD_SESSION_ID env var).
+
+Semantics:
+
+* ``max_packages_per_hour`` — a rolling 1-hour window; the package counter (and
+  its window) resets when the window lapses.
+* ``max_wheel_mb_per_session`` — a **per-session** byte budget; it accumulates
+  for the lifetime of the session ID and is *not* reset by the hourly window.
+
+Concurrency: scans run with concurrency up to 10, so the read-modify-write on
+``session_state`` executes inside a single ``BEGIN IMMEDIATE`` transaction —
+otherwise concurrent checkers read the same counter and lost updates undercount
+the limits.
 """
 
 from __future__ import annotations
@@ -12,6 +24,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+import aiosqlite
 
 from agentshield.core.config import RateLimitsConfig
 from agentshield.core.models import Finding, Severity
@@ -32,11 +46,14 @@ def _session_id() -> str:
 def _resolve_counters(state: dict[str, Any] | None, now: int) -> tuple[int, int, int]:
     """Return ``(package_count, total_bytes, window_start)`` for *state*.
 
-    Counters reset (and the window restarts at *now*) when there is no prior
-    state or the previous 1-hour window has elapsed.
+    The package counter (and its window) resets when there is no prior state or
+    the previous 1-hour window has elapsed. ``total_bytes`` is a per-*session*
+    budget and is never reset by the window.
     """
-    if state is None or state["window_start"] < now - _HOUR:
+    if state is None:
         return 0, 0, now
+    if state["window_start"] < now - _HOUR:
+        return 0, state["total_bytes"], now
     return state["package_count"], state["total_bytes"], state["window_start"]
 
 
@@ -45,22 +62,61 @@ class RateLimiter:
         self._db_path = db_path
         self._config = config
 
+    async def _connect(self) -> aiosqlite.Connection:
+        from agentshield.core.cache import CacheConfig, ScanCache
+
+        # ScanCache owns the schema; reuse it so the tables always exist.
+        cache = ScanCache(CacheConfig(db_path=self._db_path))
+        db = await aiosqlite.connect(self._db_path)
+        try:
+            await cache._ensure_schema(db)
+        except BaseException:
+            await db.close()
+            raise
+        return db
+
     async def check(self, package: str, wheel_bytes: int = 0) -> list[Finding]:
         """Check rate limits and update session counters.
 
         Returns R1.1 findings (severity HIGH) if a limit is exceeded.
-        When limits are not exceeded the package and byte counters are incremented.
+        When limits are not exceeded the package and byte counters are
+        incremented. The read-check-increment runs in one ``BEGIN IMMEDIATE``
+        transaction so concurrent scans cannot lose updates.
         """
-        from agentshield.core.cache import ScanCache
-        from agentshield.core.config import CacheConfig
-
         sid = _session_id()
         now = int(time.time())
-        cache = ScanCache(CacheConfig(db_path=self._db_path))
 
-        state = await cache.get_session_state(sid)
-        pkg_count, total_bytes, window_start = _resolve_counters(state, now)
+        db = await self._connect()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM session_state WHERE session_id = ?", (sid,)
+            ) as cur:
+                row = await cur.fetchone()
+            state = dict(row) if row else None
+            pkg_count, total_bytes, window_start = _resolve_counters(state, now)
 
+            findings = self._evaluate(pkg_count, total_bytes, wheel_bytes)
+
+            if not findings:
+                # Only count the package when it passes the rate limit check
+                await db.execute(
+                    """INSERT OR REPLACE INTO session_state
+                       (session_id, package_count, total_bytes, window_start)
+                       VALUES (?,?,?,?)""",
+                    (sid, pkg_count + 1, total_bytes + wheel_bytes, window_start),
+                )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
+        return findings
+
+    def _evaluate(self, pkg_count: int, total_bytes: int, wheel_bytes: int) -> list[Finding]:
         findings: list[Finding] = []
 
         if pkg_count >= self._config.max_packages_per_hour:
@@ -110,15 +166,6 @@ class RateLimiter:
                 )
             )
 
-        if not findings:
-            # Only count the package when it passes the rate limit check
-            await cache.upsert_session_state(
-                session_id=sid,
-                package_count=pkg_count + 1,
-                total_bytes=total_bytes + wheel_bytes,
-                window_start=window_start,
-            )
-
         return findings
 
     async def record_wheel_bytes(self, wheel_bytes: int) -> None:
@@ -127,24 +174,24 @@ class RateLimiter:
         Wheel sizes are only known after the artifact is downloaded, so they are
         recorded here rather than in :meth:`check`. A session that has already
         exceeded ``max_wheel_mb_per_session`` is then blocked by the next
-        :meth:`check` call. Does not increment the package counter.
+        :meth:`check` call. Does not increment the package counter. The update
+        is a single atomic UPSERT, safe under concurrent scans.
         """
         if wheel_bytes <= 0:
             return
 
-        from agentshield.core.cache import ScanCache
-        from agentshield.core.config import CacheConfig
-
         sid = _session_id()
         now = int(time.time())
-        cache = ScanCache(CacheConfig(db_path=self._db_path))
 
-        state = await cache.get_session_state(sid)
-        pkg_count, total_bytes, window_start = _resolve_counters(state, now)
-
-        await cache.upsert_session_state(
-            session_id=sid,
-            package_count=pkg_count,
-            total_bytes=total_bytes + wheel_bytes,
-            window_start=window_start,
-        )
+        db = await self._connect()
+        try:
+            await db.execute(
+                """INSERT INTO session_state (session_id, package_count, total_bytes, window_start)
+                   VALUES (?, 0, ?, ?)
+                   ON CONFLICT(session_id) DO UPDATE
+                   SET total_bytes = total_bytes + excluded.total_bytes""",
+                (sid, wheel_bytes, now),
+            )
+            await db.commit()
+        finally:
+            await db.close()

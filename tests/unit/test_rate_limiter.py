@@ -178,6 +178,73 @@ def test_window_reset_clears_counter(tmp_db: Path, monkeypatch: pytest.MonkeyPat
     assert findings == []
 
 
+# ── concurrency: no lost updates (regression) ─────────────────────────────
+
+
+def test_concurrent_checks_do_not_lose_updates(tmp_db: Path) -> None:
+    """The read-modify-write on session_state used to race under the scanner's
+    concurrency of 10, silently undercounting packages. With the transaction
+    all N concurrent checks must be counted."""
+
+    async def _run() -> None:
+        rl = _rl(tmp_db, max_pkg=100)
+        await asyncio.gather(*[rl.check(f"pkg-{i}") for i in range(10)])
+
+    asyncio.run(_run())
+
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import CacheConfig
+    from agentshield.core.rate_limiter import _session_id
+
+    state = asyncio.run(ScanCache(CacheConfig(db_path=tmp_db)).get_session_state(_session_id()))
+    assert state is not None
+    assert state["package_count"] == 10
+
+
+def test_concurrent_record_wheel_bytes_accumulates_all(tmp_db: Path) -> None:
+    async def _run() -> None:
+        rl = _rl(tmp_db)
+        await asyncio.gather(*[rl.record_wheel_bytes(1_000) for _ in range(10)])
+
+    asyncio.run(_run())
+
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import CacheConfig
+    from agentshield.core.rate_limiter import _session_id
+
+    state = asyncio.run(ScanCache(CacheConfig(db_path=tmp_db)).get_session_state(_session_id()))
+    assert state is not None
+    assert state["total_bytes"] == 10_000
+
+
+# ── wheel budget is per-session, not per-window (regression) ──────────────
+
+
+def test_wheel_budget_survives_window_reset(tmp_db: Path) -> None:
+    """max_wheel_mb_per_session is a *session* budget: the hourly package
+    window lapsing must not silently refill it (it previously reset both)."""
+    from agentshield.core.cache import ScanCache
+    from agentshield.core.config import CacheConfig
+    from agentshield.core.rate_limiter import _session_id
+
+    rl = _rl(tmp_db, max_pkg=1, max_mb=1)
+    asyncio.run(rl.record_wheel_bytes(2 * 1024 * 1024))  # 2 MB > 1 MB budget
+
+    # Back-date the window by 2 hours: package counter resets…
+    sid = _session_id()
+    cache = ScanCache(CacheConfig(db_path=tmp_db))
+    state = asyncio.run(cache.get_session_state(sid))
+    assert state is not None
+    old_window = int(time.time()) - 2 * 3600
+    asyncio.run(
+        cache.upsert_session_state(sid, state["package_count"], state["total_bytes"], old_window)
+    )
+
+    # …but the byte budget must still be exhausted.
+    findings = asyncio.run(rl.check("next-pkg"))
+    assert any("wheel size limit" in f.title.lower() for f in findings)
+
+
 # ── session isolation ─────────────────────────────────────────────────────
 
 

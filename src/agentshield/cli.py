@@ -818,16 +818,15 @@ def guard_scan_cmd(
                     ResponseMode.IGNORE: DecisionAction.ALLOW,
                     ResponseMode.ASYNC_REPORT: DecisionAction.LOG_ASYNC,
                 }
-                action_order = [
-                    DecisionAction.ALLOW,
-                    DecisionAction.LOG_ASYNC,
-                    DecisionAction.NEEDS_CONFIRMATION,
-                    DecisionAction.BLOCK,
-                ]
 
-                worst_action = DecisionAction.ALLOW
+                # NEEDS_CONFIRMATION must pause for a human (same contract as the
+                # language-package path below); LOG_ASYNC is warn-only. The two
+                # were previously merged into one bucket that always proceeded,
+                # so a HIGH CVE under the default warn_confirm policy printed a
+                # warning and installed anyway.
                 cve_blocked: list[tuple[str, str]] = []
-                cve_warned: list[tuple[str, str]] = []
+                cve_needs_confirmation: list[tuple[str, str]] = []
+                cve_log_async: list[tuple[str, str]] = []
 
                 for finding in cve_findings:
                     # Rule-level override first, then syspkg policy
@@ -839,20 +838,17 @@ def guard_scan_cmd(
 
                     if action == DecisionAction.BLOCK:
                         cve_blocked.append((finding.rule_id, finding.title))
-                    elif action in (
-                        DecisionAction.NEEDS_CONFIRMATION,
-                        DecisionAction.LOG_ASYNC,
-                    ):
-                        cve_warned.append((finding.rule_id, finding.title))
+                    elif action == DecisionAction.NEEDS_CONFIRMATION:
+                        cve_needs_confirmation.append((finding.rule_id, finding.title))
+                    elif action == DecisionAction.LOG_ASYNC:
+                        cve_log_async.append((finding.rule_id, finding.title))
 
-                    if action_order.index(action) > action_order.index(worst_action):
-                        worst_action = action
-
-                if cve_warned:
+                if cve_log_async:
                     console.print(
-                        f"[yellow]AgentShield: {len(cve_warned)} CVE(s) flagged for review[/yellow]",
+                        f"[yellow]AgentShield: {len(cve_log_async)} CVE(s) logged "
+                        f"for async review — proceeding[/yellow]",
                     )
-                    for rule_id, title in cve_warned:
+                    for rule_id, title in cve_log_async:
                         console.print(f"  • {rule_id}: {title}")
 
                 if cve_overflow:
@@ -867,7 +863,18 @@ def guard_scan_cmd(
                     )
                     for rule_id, title in cve_blocked:
                         console.print(f"  • {rule_id}: {title}")
-                    raise typer.Exit(code=1)
+                    raise typer.Exit(code=GUARD_EXIT_BLOCK)
+
+                if cve_needs_confirmation:
+                    console.print(
+                        f"[yellow]AgentShield: {len(cve_needs_confirmation)} CVE(s) "
+                        f"require confirmation before install:[/yellow]",
+                    )
+                    for rule_id, title in cve_needs_confirmation:
+                        console.print(f"  • {rule_id}: {title}")
+                    if not _guard_confirmation_granted(err_console):
+                        raise typer.Exit(code=GUARD_EXIT_NEEDS_CONFIRMATION)
+                    console.print("[green]AgentShield: confirmation granted — proceeding.[/green]")
 
     manifest_paths, manifest_suspicions = registry.parse_manifests(command)
     suspicions = registry.find_suspicions(command) + manifest_suspicions

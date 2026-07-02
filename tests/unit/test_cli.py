@@ -338,6 +338,83 @@ def test_guard_block_exits_1(tmp_path):
     assert "BLOCKED" in result.output
 
 
+# ── guard-scan-cmd: syspkg CVE findings must honor the same warn_confirm contract ──
+# Regression: HIGH CVEs (warn_confirm under the default syspkg policy) were merged
+# with LOG_ASYNC into one "flagged for review" bucket that always proceeded — the
+# install ran without ever pausing for a human.
+
+
+def _syspkg_cfg(tmp_path, floor="HIGH"):
+    cfg = tmp_path / "syspkg.toml"
+    cfg.write_text(
+        f'[cache]\ndb_path = "{tmp_path / "syspkg.db"}"\n'
+        f'[syspkg]\nenabled = true\ncve_scan = true\nseverity_floor = "{floor}"\n'
+    )
+    return cfg
+
+
+def _syspkg_invoke(tmp_path, findings, env=None, floor="HIGH"):
+    from agentshield.analyzers.syspkg_cve import SysPkgCVEScanner
+
+    async def _fake_scan(self, warnings):  # noqa: ANN001
+        return findings
+
+    with patch.object(SysPkgCVEScanner, "scan_warnings", _fake_scan):
+        return runner.invoke(
+            app,
+            [
+                "guard-scan-cmd",
+                "--config",
+                str(_syspkg_cfg(tmp_path, floor=floor)),
+                "--",
+                "apt-get",
+                "install",
+                "libfoo",
+            ],
+            env=env,
+        )
+
+
+def _syspkg_finding(severity: Severity, rule_id: str = "CVE-2024-0001"):
+    from agentshield.core.models import Finding
+
+    return Finding(
+        rule_id=rule_id,
+        title=f"{severity.value} syspkg CVE",
+        severity=severity,
+        source="syspkg_cve",
+    )
+
+
+def test_syspkg_high_cve_fails_closed_when_noninteractive(tmp_path):
+    # Default syspkg policy: HIGH → warn_confirm → must pause; no TTY → fail closed.
+    result = _syspkg_invoke(tmp_path, [_syspkg_finding(Severity.HIGH)])
+    assert result.exit_code == GUARD_EXIT_NEEDS_CONFIRMATION, result.output
+    assert "confirmation" in result.output.lower()
+
+
+def test_syspkg_high_cve_assume_yes_proceeds(tmp_path):
+    result = _syspkg_invoke(
+        tmp_path, [_syspkg_finding(Severity.HIGH)], env={"AGENTSHIELD_ASSUME_YES": "1"}
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_syspkg_critical_cve_blocks(tmp_path):
+    # Default syspkg policy: CRITICAL → block.
+    result = _syspkg_invoke(tmp_path, [_syspkg_finding(Severity.CRITICAL)])
+    assert result.exit_code == GUARD_EXIT_BLOCK, result.output
+    assert "BLOCKED" in result.output
+
+
+def test_syspkg_medium_cve_logs_async_and_proceeds(tmp_path):
+    # Default syspkg policy: MEDIUM → async_report → warn-only, proceed.
+    # (Floor lowered to MEDIUM so the finding survives the severity_floor filter.)
+    result = _syspkg_invoke(tmp_path, [_syspkg_finding(Severity.MEDIUM)], floor="MEDIUM")
+    assert result.exit_code == 0, result.output
+    assert "async review" in result.output.lower()
+
+
 def _fake_sys(*, stdin_tty: bool, stderr_tty: bool):
     return SimpleNamespace(
         stdin=SimpleNamespace(isatty=lambda: stdin_tty),

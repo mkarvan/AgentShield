@@ -120,6 +120,8 @@ class GitHubAdvisoryClient:
 
 
 def _node_to_finding(node: dict[str, Any], request: ScanRequest) -> Finding | None:
+    from agentshield.core.versions import version_in_github_range
+
     advisory = node.get("advisory", {})
 
     # Skip withdrawn advisories
@@ -129,6 +131,14 @@ def _node_to_finding(node: dict[str, Any], request: ScanRequest) -> Finding | No
     ghsa_id: str = advisory.get("ghsaId", "")
     if not ghsa_id:
         return None
+
+    # When the request pins a version, drop advisories whose vulnerable range
+    # confidently excludes it. Unparseable ranges/versions fail toward
+    # reporting (None keeps the finding); unpinned requests are never filtered.
+    if request.version:
+        affected = version_in_github_range(request.version, node.get("vulnerableVersionRange"))
+        if affected is False:
+            return None
 
     # Prefer CVE identifier if present, fall back to GHSA
     identifiers = advisory.get("identifiers", [])

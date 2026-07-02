@@ -92,6 +92,44 @@ def test_node_to_finding_skips_withdrawn():
     assert f is None
 
 
+# ── version-range filtering (regression) ──────────────────────────────────────
+# vulnerableVersionRange was fetched but never compared against the pinned
+# version, so version-pinned scans reported advisories for ranges they are
+# outside of.
+
+
+def test_node_to_finding_pinned_version_outside_range_is_dropped():
+    node = _make_node(vuln_range=">= 2.0.0, < 2.29.0")
+    req = ScanRequest(package="requests", version="2.31.0", ecosystem=Ecosystem.PYPI)
+    assert _node_to_finding(node, req) is None
+
+
+def test_node_to_finding_pinned_version_inside_range_is_kept():
+    node = _make_node(vuln_range=">= 2.0.0, < 2.29.0")
+    req = ScanRequest(package="requests", version="2.5.0", ecosystem=Ecosystem.PYPI)
+    f = _node_to_finding(node, req)
+    assert f is not None
+    assert f.metadata["vulnerable_range"] == ">= 2.0.0, < 2.29.0"
+
+
+def test_node_to_finding_unpinned_request_is_never_filtered():
+    node = _make_node(vuln_range=">= 2.0.0, < 2.29.0")
+    f = _node_to_finding(node, _make_request())
+    assert f is not None
+
+
+def test_node_to_finding_unparseable_range_fails_toward_reporting():
+    node = _make_node(vuln_range="^2.0.0")  # unrecognised comparator syntax
+    req = ScanRequest(package="requests", version="99.0", ecosystem=Ecosystem.PYPI)
+    assert _node_to_finding(node, req) is not None
+
+
+def test_node_to_finding_missing_range_fails_toward_reporting():
+    node = _make_node(vuln_range="")
+    req = ScanRequest(package="requests", version="99.0", ecosystem=Ecosystem.PYPI)
+    assert _node_to_finding(node, req) is not None
+
+
 def test_node_to_finding_critical_severity():
     node = _make_node(severity="CRITICAL", cvss_score=9.8)
     f = _node_to_finding(node, _make_request())

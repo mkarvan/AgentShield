@@ -370,3 +370,55 @@ async def test_deep_unsupported_finding_does_not_block(tmp_path: Path):
 
     assert "DEEP.UNSUPPORTED" in {f.rule_id for f in result.findings}
     assert result.decision.action == DecisionAction.ALLOW
+
+
+# ── timed-out subprocesses are killed (regression) ─────────────────────────────
+
+
+def test_bandit_timeout_kills_process(monkeypatch, tmp_path):
+    """A bandit run that exceeds the timeout must be killed, not leaked."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from agentshield.analyzers import bandit_runner
+    from agentshield.core.models import Ecosystem, ScanRequest
+
+    proc = MagicMock()
+    proc.returncode = None
+    proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+    proc.kill = MagicMock()
+    proc.wait = AsyncMock()
+
+    monkeypatch.setattr(bandit_runner, "_bandit_available", lambda: "/usr/bin/bandit")
+    monkeypatch.setattr(
+        bandit_runner.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)
+    )
+
+    req = ScanRequest(package="p", ecosystem=Ecosystem.PYPI)
+    findings = asyncio.run(bandit_runner.run_bandit(tmp_path, req))
+    assert findings == []
+    proc.kill.assert_called_once()
+
+
+def test_semgrep_timeout_kills_process(monkeypatch, tmp_path):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from agentshield.analyzers import semgrep_runner
+    from agentshield.core.models import Ecosystem, ScanRequest
+
+    proc = MagicMock()
+    proc.returncode = None
+    proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+    proc.kill = MagicMock()
+    proc.wait = AsyncMock()
+
+    monkeypatch.setattr(semgrep_runner, "_semgrep_available", lambda: "/usr/bin/semgrep")
+    monkeypatch.setattr(
+        semgrep_runner.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)
+    )
+
+    req = ScanRequest(package="p", ecosystem=Ecosystem.PYPI)
+    findings = asyncio.run(semgrep_runner.run_semgrep(tmp_path, req))
+    assert findings == []
+    proc.kill.assert_called_once()

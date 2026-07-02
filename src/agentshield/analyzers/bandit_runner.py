@@ -95,6 +95,18 @@ def _bandit_available() -> str | None:
     return shutil.which("bandit")
 
 
+async def _kill(proc: asyncio.subprocess.Process | None) -> None:
+    """Terminate a timed-out/failed subprocess so it doesn't leak."""
+    if proc is None or proc.returncode is not None:
+        return
+    import contextlib
+
+    with contextlib.suppress(ProcessLookupError, OSError):
+        proc.kill()
+    with contextlib.suppress(Exception):
+        await proc.wait()
+
+
 async def run_bandit(package_dir: Path, request: ScanRequest) -> list[Finding]:
     """Run bandit on *package_dir* and return AgentShield findings.
 
@@ -117,6 +129,7 @@ async def run_bandit(package_dir: Path, request: ScanRequest) -> list[Finding]:
         str(package_dir),
     ]
 
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -126,9 +139,11 @@ async def run_bandit(package_dir: Path, request: ScanRequest) -> list[Finding]:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
     except TimeoutError:
         logger.warning("bandit timed out scanning %s", package_dir)
+        await _kill(proc)
         return []
     except Exception as exc:
         logger.warning("bandit failed: %s", exc)
+        await _kill(proc)
         return []
 
     if not stdout:
